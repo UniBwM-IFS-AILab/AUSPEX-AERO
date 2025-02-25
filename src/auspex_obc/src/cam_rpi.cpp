@@ -1,0 +1,1 @@
+#include "auspex_obc/cam_rpi.hpp"
