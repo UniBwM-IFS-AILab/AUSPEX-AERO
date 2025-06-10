@@ -1,6 +1,6 @@
 # AUSPEX-AERO
 * AUSPEX-AERO &rarr; Onboard Software, including the Offboard Controller
-* 
+
 For detailed instructions see the main repository [AUSPEX](https://github.com/UniBwM-IFS-AILab/AUSPEX).
 To cite **AUSPEX-AERO**, please use the following reference:
 ```
