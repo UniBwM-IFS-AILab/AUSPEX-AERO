@@ -33,14 +33,13 @@ public:
     void set_gps_converter(std::shared_ptr<GeodeticConverter> gps_converter) override {
         gps_converter_ = gps_converter;
     }
-    
+
     /**
 	* @brief Send a command to set the home position of the vehicle (px4)
 	*/
     void set_home_fc(double latitude, double longitude, double altitude) override {
         // |Use current (1=use current location, 0=use specified location)| Empty| Empty| Empty| Latitude| Longitude| Altitude|
         publish_vehicle_command(px4_msgs::msg::VehicleCommand::VEHICLE_CMD_DO_SET_HOME, 0, 0, 0, 0, latitude, longitude, altitude);
-        RCLCPP_INFO(this->get_logger(), "SetHome command send");
     }
 
     /**
@@ -50,7 +49,7 @@ public:
         // Takeoff from ground / hand |Minimum pitch (if airspeed sensor present), desired pitch without sensor| Empty| Empty| Yaw angle (if magnetometer present), ignored without magnetometer| Latitude| Longitude| Altitude|
         if(publish_vehicle_command(px4_msgs::msg::VehicleCommand::VEHICLE_CMD_NAV_TAKEOFF, 0, 0, 0, 0, position_listener_->get_recent_gps_msg()->lat, position_listener_->get_recent_gps_msg()->lon, takeoff_height)){
             RCLCPP_INFO(this->get_logger(), "Takeoff command send");
-            return true; 
+            return true;
         }
         return false;
     }
@@ -113,33 +112,15 @@ public:
     }
 
     /**
-    * @brief Send a heartbeat (PX4) and position and vel control. (PX4)
-    */
-    void publish_offboard_heartbeatVel() override {
-        if(vehicle_status_listener_->get_Paused_from_Extern_msg()){
-            return;
-        }
-        px4_msgs::msg::OffboardControlMode msg{};
-        msg.timestamp = this->get_clock()->now().nanoseconds() / 1000;
-        msg.position = true;
-        msg.velocity = false;
-        msg.acceleration = false;
-        msg.attitude = false;
-        msg.body_rate = false;
-
-        offboard_control_mode_publisher_->publish(msg);
-    }
-
-    /**
     * @brief Publish a command to let the vehicle hover in a given ned position.
     */
     void hover_in_position(double hover_north, double hover_east, double hover_down, double roll, double pitch, double yaw) override {
         px4_msgs::msg::TrajectorySetpoint msg{};
         msg.timestamp = this->get_clock()->now().nanoseconds() / 1000;
-        
+
         msg.position = {hover_north, hover_east, hover_down};
         msg.yaw = yaw; // [-PI:PI]
-        
+
         publish_offboard_heartbeat(); //hold flight mode
         trajectory_setpoint_publisher_->publish(msg);
     }
@@ -150,12 +131,12 @@ public:
     void hover_in_current_position() override {
         px4_msgs::msg::TrajectorySetpoint msg{};
         msg.timestamp = this->get_clock()->now().nanoseconds() / 1000;
-        
+
         tf2::Quaternion q(position_listener_->get_recent_ned_msg()->q[1],position_listener_->get_recent_ned_msg()->q[2],position_listener_->get_recent_ned_msg()->q[3],position_listener_->get_recent_ned_msg()->q[0]);
         tf2::Matrix3x3 m(q);
         double roll, pitch, yaw;
         m.getRPY(roll, pitch, yaw);
-        
+
         msg.position = {position_listener_->get_recent_ned_msg()->position[0], position_listener_->get_recent_ned_msg()->position[1], position_listener_->get_recent_ned_msg()->position[2]};
         msg.yaw = yaw; // [-PI:PI]
         this->publish_offboard_control_mode();
@@ -177,7 +158,7 @@ public:
         current_north = position_listener_->get_recent_ned_msg()->position[0];
         current_east = position_listener_->get_recent_ned_msg()->position[1];
         current_down = position_listener_->get_recent_ned_msg()->position[2];
-        
+
         double delta_n = north - current_north, delta_e = east - current_east, delta_d = down - current_down;
         // discretize delta values
         delta_n = gps_converter_->discretize(delta_n,5.0);
@@ -212,7 +193,7 @@ public:
         if(!vehicle_status_listener_->get_Paused_from_Extern_msg()){
             trajectory_setpoint_publisher_->publish(msg);
         }
-        
+
         return gps_converter_->getDistance(delta_n, delta_e, delta_d);
     }
 
@@ -220,21 +201,21 @@ public:
     * @brief Publish a trajectory setpoint to a ned coordinate
     */
     double move_to_ned(double north, double east, double down, double roll, double pitch, double yaw) override {
-        // Current NED coordinates relative to origin 
+        // Current NED coordinates relative to origin
         double current_north, current_east, current_down;
 
         // receive current NED coordinates from PX4
         current_north = position_listener_->get_recent_ned_msg()->position[0];
         current_east = position_listener_->get_recent_ned_msg()->position[1];
         current_down = position_listener_->get_recent_ned_msg()->position[2];
-        
+
         double delta_n = north - current_north, delta_e = east - current_east, delta_d = down - current_down;
 
         // discretize delta values
         delta_n = gps_converter_->discretize(delta_n,5.0);
         delta_e = gps_converter_->discretize(delta_e,5.0);
-        delta_d = gps_converter_->discretize(delta_d,5.0);							
-        
+        delta_d = gps_converter_->discretize(delta_d,5.0);
+
         px4_msgs::msg::TrajectorySetpoint msg{};
         msg.timestamp = this->get_clock()->now().nanoseconds() / 1000;
 
@@ -250,7 +231,7 @@ public:
         if(!vehicle_status_listener_->get_Paused_from_Extern_msg()){
             trajectory_setpoint_publisher_->publish(msg);
         }
-        
+
         return gps_converter_->getDistance(delta_n, delta_e, delta_d);
     }
 
@@ -276,12 +257,12 @@ public:
         msg.param6 = param6;
         msg.param7 = param7;
         msg.command = command;
-        
+
         // the target_system field makes problems with mutiple drones... set to 0 to ignore
         // related to mavlink system id
         msg.target_system = 0;
         msg.target_component = 1;
-        
+
         msg.source_system = 50; //1 is px4 flightcontroller || 255 == qgroundcontrol
         msg.source_component = 1;
         msg.from_external = true;

@@ -12,25 +12,25 @@ public:
 		recent_gps_msg->lat = -1;
 		recent_gps_msg->lon = -1;
 		recent_gps_msg->alt = -1;
-		
+
 		px4_msgs::msg::VehicleOdometry empty_ned_msg{};
 		recent_ned_msg = std::make_shared<px4_msgs::msg::VehicleOdometry>(std::move(empty_ned_msg));
-		
+
 		px4_msgs::msg::HomePosition empty_home_msg{};
 		recent_home_msg = std::make_shared<px4_msgs::msg::HomePosition>(std::move(empty_home_msg));
 
 		rmw_qos_profile_t qos_profile = rmw_qos_profile_sensor_data;
 		auto qos = rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 5), qos_profile);
-		
+
     }
 
     /**
      * @brief checks if one gps update is already made. To init FC one gps position is needed.
      */
     std::future<bool> get_next_gps_future() override {
-        if(gps_promise_set){			
+        if(gps_promise_set){
 			gps_promise_set = false;
-			gps_promise = std::promise<bool>();			
+			gps_promise = std::promise<bool>();
 		}
 		return gps_promise.get_future();
     }
@@ -55,11 +55,33 @@ public:
 	px4_msgs::msg::HomePosition::SharedPtr get_recent_home_msg() override {
         return recent_home_msg;
     }
+
+    void set_recent_home_msg() override {
+        recent_home_msg->lat = recent_gps_msg->lat;
+        recent_home_msg->lon = recent_gps_msg->lon;
+        recent_home_msg->alt = recent_gps_msg->alt;
+    }
+
+
+    /**
+     * @brief Gets the recent platform state.
+     */
+     std::string get_recent_platform_state() override {
+        return "INACTIVE";
+     }
+
+    /**
+     * @brief Sets the recent platform state.
+     */
+     void set_recent_platform_state(std::string new_platform_state) override {
+
+     };
+
 private:
 	px4_msgs::msg::VehicleGlobalPosition::SharedPtr recent_gps_msg;
 	px4_msgs::msg::VehicleOdometry::SharedPtr recent_ned_msg;
 	px4_msgs::msg::HomePosition::SharedPtr recent_home_msg;
-	
+
 	std::promise<bool> gps_promise;
 	bool gps_promise_set = false;
 };

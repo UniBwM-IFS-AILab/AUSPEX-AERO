@@ -3,23 +3,33 @@ from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.substitutions import LaunchConfiguration
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
-
+import json
+import os
 
 def launch_setup(context, *args, **kwargs):
-    # number of nodes to start
-    # good reference here: https://answers.ros.org/question/376816/how-to-pass-launch-args-dynamically-during-launch-time/ <-- argv hack should work as well
-    # and https://answers.ros.org/question/322874/ros2-what-is-different-between-declarelaunchargument-and-launchconfiguration/
-    # and https://answers.ros.org/question/396345/ros2-launch-file-how-to-convert-launchargument-to-string/ <-- chives_onion answer
-    
     count = int(context.perform_substitution(LaunchConfiguration('count')))
-    
-    launch_array =  []
- 
-    #print('The drone count is ' + str(count))
 
-    # if arguments contains only the "" empty string, then it is completely left out and the next argument "--ros-args" replaces its position in argv[1]
-    if count < 2:
-        name_prefix = "vhcl0"
+    json_file = os.path.expanduser("~/auspex_params/platform_properties/platform_properties.json")
+
+    # Check if file exists
+    if not os.path.exists(json_file):
+        print(f"Error: JSON file not found at {json_file}")
+        exit(1)
+    # Read and parse JSON
+    with open(json_file, "r") as file:
+        data = json.load(file)
+
+    # Extract platform_id
+    platform_id = data.get("platform_id", None)
+    # Validate platform_id
+    if not platform_id:
+        print("Error: platform_id not found in JSON!")
+        exit(1)
+
+    launch_array =  []
+
+    for x in range(0, count):
+        name_prefix = platform_id + '_' + str(x)
         launch_array.append(
             Node(
                 package='auspex_obc',
@@ -29,18 +39,6 @@ def launch_setup(context, *args, **kwargs):
                 arguments=[name_prefix]
             )
         )
-    else:
-        for x in range(0, count):
-            name_prefix = 'vhcl'+ str(x)
-            launch_array.append(
-                Node(
-                    package='auspex_obc',
-                    executable='auspex_obc',
-                    output='screen',
-                    shell=True,
-                    arguments=[name_prefix]
-                )
-            )
     return launch_array
 
 # declare command line argument via appending count:=NUMBER when starting the launch file from terminal

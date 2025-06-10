@@ -25,6 +25,8 @@
 #include "auspex_msgs/srv/insert_knowledge.hpp"
 #include "auspex_msgs/srv/exists_knowledge.hpp"
 
+#include "msg_context_cpp/message_loader.hpp"
+
 // Base Class
 #include "auspex_fci/fc_interface_base.hpp"
 #include "auspex_fci/position_listener_base.hpp"
@@ -40,26 +42,29 @@
 #include "auspex_fci/anafi/position_listener_anafi.hpp"
 #include "auspex_fci/anafi/status_listener_anafi.hpp"
 
-#include "msg_context_cpp/message_loader.hpp"
+
 
 // following include is for transforming gps to NED coordinates
 #include "auspex_fci/geodetic_converter.hpp"
 
-// Nodes for listening to px4 messages
+// Nodes for listening to FC messages
 #include "auspex_obc/drone_state_publisher.hpp"
 
-#ifdef INCLUDE_SIM_HEADER
-	#include "auspex_obc/cam_sim.hpp"
-	typedef SimCamPublisher CamPublisher;
-#else
-	#include "auspex_obc/cam_rpi5.hpp"
-	typedef RPI5_CameraPublisher CamPublisher;
+#ifdef SWITCH_CAM_HEADER
+	#if SWITCH_CAM_HEADER == 1
+		#include <auspex_ocs/cam_publisher_sim.hpp>
+		typedef SimCamPublisher CamPublisher;
+	#elif SWITCH_CAM_HEADER == 2
+		#include <auspex_ocs/cam_publisher_rpi5.hpp>
+		typedef RPI5CamPublisher CamPublisher;
+	#elif SWITCH_CAM_HEADER == 3
+		#include <auspex_ocs/cam_publisher_rpi.hpp>
+		typedef RPICamPublisher CamPublisher;
+	#elif SWITCH_CAM_HEADER == 4
+		#include <auspex_ocs/cam_publisher_mk_smart.hpp>
+		typedef MkSmartCamPublisher CamPublisher;
+	#endif
 #endif
-      
-#include <px4_msgs/msg/offboard_control_mode.hpp>
-#include <px4_msgs/msg/trajectory_setpoint.hpp>
-#include <px4_msgs/msg/vehicle_command.hpp>
-#include <px4_msgs/msg/vehicle_control_mode.hpp>
 
 #include <rclcpp/rclcpp.hpp>
 #include <stdint.h>
@@ -74,7 +79,6 @@
 
 using namespace std::chrono;
 using namespace std::chrono_literals;
-using namespace px4_msgs::msg;
 using std::placeholders::_1;
 
 
@@ -94,7 +98,7 @@ using ExistsKnowledge = auspex_msgs::srv::ExistsKnowledge;
 
 class OffboardController : public rclcpp::Node {
 public:
-	
+
 	std::shared_ptr<VehicleStatusListener_Base> vehicle_status_listener_;
 	std::shared_ptr<VehicleGlobalPositionListener_Base> position_listener_;
 	std::shared_ptr<DroneStatePublisher> drone_state_publisher_;
@@ -104,15 +108,15 @@ public:
 	std::deque<ExecuteAtom> executeSequenceQueue;
 
 	// name_prefix should have the format "<identifier>/"
-	OffboardController(std::shared_ptr<VehicleStatusListener_Base> vehicle_status_listener, 
-					std::shared_ptr<VehicleGlobalPositionListener_Base> position_listener, 
+	OffboardController(std::shared_ptr<VehicleStatusListener_Base> vehicle_status_listener,
+					std::shared_ptr<VehicleGlobalPositionListener_Base> position_listener,
 					std::shared_ptr<FC_Interface_Base> fc_interface,
 					std::shared_ptr<DroneStatePublisher> drone_state_publisher,
 					std::shared_ptr<CamPublisher> cam_publisher,
 					std::string name_prefix = "") ;
-	
+
 	~OffboardController() = default;
-	
+
 	double getHeightAMSL(AltitudeLevel level, double value);
 	double get_groundHeight_amsl();
 	void timer_callback();
@@ -123,14 +127,14 @@ public:
 	void disarm();
 
 private:
-	enum RETURN_VALUE { action_critical_failure = -2, action_failure = -1, action_completed = 0, goal_succeeded = 4, goal_canceled = 5, action_paused = 6, action_splitted =7};
+	enum RETURN_VALUE { action_critical_failure = -2, action_failure = -1, action_completed = 0, goal_succeeded = 4, goal_canceled = 5, action_paused = 6, action_splitted =7, action_unkown = 8 };
 
-	std::string _current_action_type;
+	int current_action_index = 0;
 	std::mutex execute_queue_lock;
-	
+
 	// pointer to action server objects
 	rclcpp_action::Server<ExecuteSequence>::SharedPtr sequence_action_server_;
-	
+
 	// pointer to services
 	rclcpp::Service<auspex_msgs::srv::GetOrigin>::SharedPtr get_origin_service_;
 	rclcpp::Service<auspex_msgs::srv::SetOrigin>::SharedPtr set_origin_service_;
@@ -150,20 +154,20 @@ private:
 	std::string name_prefix_;
 
 	rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const typename ExecuteSequence::Goal> goal){
-		std::cout << "In handle_goal \n";
+		RCLCPP_INFO(this->get_logger(), "Received new Goal Request");
 		return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 	}
-	
+
 	rclcpp_action::CancelResponse handle_cancel_sequence( const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle){
 		RCLCPP_INFO(this->get_logger(), "Received request to cancel goal");
 		return rclcpp_action::CancelResponse::ACCEPT;
 	}
-	
+
 	void handle_accepted_sequence(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle){
-		std::cout << "In handle_accepted_sequence \n";
+		RCLCPP_INFO(this->get_logger(), "Accepted Sequence Goal");
 		std::thread{std::bind(&OffboardController::execute_sequence, this, _1), goal_handle}.detach();
 	}
-	
+
 	std::vector<Vector3D> get_scanWaypoints(double scan_height, double sensor_width, std::vector<geometry_msgs::msg::Pose2D> polygon_vertices);
 	std::vector<ExecuteAtom> generateFlyAtomFromVector(std::vector<Vector3D> &gps_positions);
 	/*
@@ -189,7 +193,7 @@ private:
 	int execute_searchArea(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action = false);
 
 	int execute_startDetection(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action = false);
-	
+
 	int execute_stopDetection(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action = false);
 
 	int execute_takeImage(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action = false);
@@ -205,9 +209,9 @@ private:
 	int execute_flyAboveHeighestPoint(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action = false);
 
 	int execute_waypoint3D(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action = false);
-	
+
 	int execute_takeoff(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg,  bool final_action = false);
-	
+
 	int execute_landing(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action = false);
 
 	int execute_hover(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action = false);
@@ -231,4 +235,4 @@ private:
 	void handle_add_action(const std::shared_ptr<auspex_msgs::srv::AddAction::Request> request, std::shared_ptr<auspex_msgs::srv::AddAction::Response> response);
 };//Class end
 
-#endif 
+#endif

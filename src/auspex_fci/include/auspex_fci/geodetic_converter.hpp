@@ -31,7 +31,7 @@ class GeodeticConverter
     double phiP = atan2(home_ecef_z_, sqrt(pow(home_ecef_x_, 2) + pow(home_ecef_y_, 2)));
 
     ecef_to_ned_matrix_ = nRe(phiP, home_longitude_rad_);
-    ned_to_ecef_matrix_ = nRe(home_latitude_rad_, home_longitude_rad_).transpose();    
+    ned_to_ecef_matrix_ = nRe(home_latitude_rad_, home_longitude_rad_).transpose();
   }
 
   void getHomeGPS(double* latitude, double* longitude, double* altitude)
@@ -40,11 +40,11 @@ class GeodeticConverter
     *longitude = home_longitude_;
     *altitude = home_altitude_;
   }
-  
+
   double getDistance(const double x, const double y, const double z){
 	  return sqrt(x * x + y * y + z * z);
   }
-  
+
   double discretize(const double decimal, const double stepsize){
 	  const double multiplier = std::pow(10.0, stepsize);
     return std::ceil(decimal * multiplier) / multiplier;

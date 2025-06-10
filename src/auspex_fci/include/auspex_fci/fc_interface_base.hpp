@@ -47,12 +47,12 @@ public:
     virtual void disarm() = 0;
 
     /**
-    * @brief Send a command to enable position control (PX4)
+    * @brief Send a command to set position control mode (PX4)
     */
     virtual bool publish_position_control_mode() = 0;
 
     /**
-    * @brief Set FC to offboard control mode. Should return true if in offboard mode and fals if not.
+    * @brief Send a command to set offboard control mode (PX4)
     */
     virtual bool publish_offboard_control_mode() = 0;
 
@@ -60,11 +60,6 @@ public:
     * @brief Send a heartbeat (PX4) and position control. (PX4)
     */
     virtual void publish_offboard_heartbeat() = 0;
-
-    /**
-    * @brief Send a heartbeat (PX4) and position and vel control. (PX4)
-    */
-    virtual void publish_offboard_heartbeatVel() = 0;
 
     /**
     * @brief Publish a command to let the vehicle hover in a given ned position.

@@ -22,7 +22,7 @@ public:
     void set_gps_converter(std::shared_ptr<GeodeticConverter> gps_converter) override {
         gps_converter_ = gps_converter;
     }
-    
+
     /**
 	* @brief Send a command to set the home position of the vehicle (px4)
 	*/
@@ -34,7 +34,7 @@ public:
     * @brief Send a command to the vehicle to take off 10 meters <-- altitude is not relative to the ground. Return true if flying
     */
     bool takeoff(double takeoff_height) override {
-        return true; 
+        return true;
     }
 
     /**
@@ -73,7 +73,7 @@ public:
     /**
     * @brief Publish a trajectory setpoint to a gps coordinate returns the distance left to the target while moving towards the target, dont decrease the distances, the target NED trajectory point should stay constant
     */
-    double move_to_gps(double latitude, double longitude, double altitude, HEADING heading) override {       
+    double move_to_gps(double latitude, double longitude, double altitude, HEADING heading) override {
         return 0.0;
     }
 
@@ -117,13 +117,6 @@ public:
     */
     void publish_offboard_heartbeat() override {
        // Not needed
-    }
-
-    /**
-    * @brief Send a heartbeat (PX4) and position and vel control. (PX4)
-    */
-    void publish_offboard_heartbeatVel() override {
-        // Not needed
     }
 };
 

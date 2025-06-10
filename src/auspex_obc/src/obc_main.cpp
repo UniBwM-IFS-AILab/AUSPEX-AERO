@@ -5,7 +5,6 @@
 #include <cstdlib>  // for setenv
 
 using json = nlohmann::json;
-enum obc_mode{PX4, ANAFI, PX4_SIMULATION, ANAFI_SIMULATION};
 
 std::string getEnvVar( std::string const & key ){
     char * val = getenv( key.c_str() );
@@ -32,7 +31,7 @@ std::string register_platform(json& config){
 			RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Interrupted while waiting for the service. Exiting.");
 			return "";
 		}
-		RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "service not available, waiting again...");
+		RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "exists_knowledge_client_ service not available, waiting again...");
 	}
 
 	std::string platform_id = config["platform_id"];
@@ -42,11 +41,16 @@ std::string register_platform(json& config){
 	exists_request->path = "$[?(@.platform_id==\"" + platform_id + "\")]";
 	// Asynchronously call the service
 	auto exists_future_result  = exists_knowledge_client_->async_send_request(exists_request);
-
 	// Block until the result is available or timeout occurs
-
-    if (! (rclcpp::spin_until_future_complete(node, exists_future_result, std::chrono::seconds(5)) == rclcpp::FutureReturnCode::SUCCESS)){
-		RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Service call to ExistsKnowledge %s timed out.", platform_id.c_str());
+    auto spin_result = rclcpp::spin_until_future_complete(node, exists_future_result);
+	if (spin_result != rclcpp::FutureReturnCode::SUCCESS) {
+		if (spin_result == rclcpp::FutureReturnCode::TIMEOUT) {
+			RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Service call to ExistsKnowledge %s timed out.", platform_id.c_str());
+		} else if (spin_result == rclcpp::FutureReturnCode::INTERRUPTED) {
+			RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Service call to ExistsKnowledge %s was interrupted.", platform_id.c_str());
+		} else {
+			RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Service call to ExistsKnowledge %s failed with unknown error.", platform_id.c_str());
+		}
 		return "";
 	}
 
@@ -54,16 +58,16 @@ std::string register_platform(json& config){
 	if (exists_result->exists) {
 		RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Platform %s already existing.", platform_id.c_str());
 		return "";
-	} 
-	
+	}
+
 	RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Platform %s does not exist in Knowledgebase, now inserting...", platform_id.c_str());
-	
+
 	while (!insert_knowledge_client_->wait_for_service(1s)) {
 		if (!rclcpp::ok()) {
 			RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Interrupted while waiting for the service. Exiting.");
 			return "";
 		}
-		RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "service not available, waiting again...");
+		RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "insert_knowledge_client_ service not available, waiting again...");
 	}
 
 	auto insert_request = std::make_shared<InsertKnowledge::Request>();
@@ -73,7 +77,7 @@ std::string register_platform(json& config){
 	// Asynchronously call the service
 	auto insert_future_result  = insert_knowledge_client_->async_send_request(insert_request);
 
-	if (!(rclcpp::spin_until_future_complete(node, insert_future_result, std::chrono::seconds(5)) == rclcpp::FutureReturnCode::SUCCESS)){
+	if (!(rclcpp::spin_until_future_complete(node, insert_future_result) == rclcpp::FutureReturnCode::SUCCESS)){
 		RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Service call to InsertKnowledge %s timed out.", platform_id.c_str());
 		return "";
 	}
@@ -124,7 +128,7 @@ std::string register_platform(json& config){
     platform_capabilities_msg.platform_class = platform_class;
     platform_capabilities_msg.sensor_caps = sensor_capabilities_msg;
 
-	
+
 	publisher_->publish(platform_capabilities_msg);
 	publisher_->publish(platform_capabilities_msg);
 
@@ -139,32 +143,13 @@ int main(int argc, char* argv[]) {
 	rclcpp::init(argc, argv);
 
 	std::string file_path = "";
-	obc_mode mode = PX4_SIMULATION;
 
 	// Important to ba an env variable because omits airsim while building
-	std::string mode_string = getEnvVar("OBC_MODE");
+	std::string FC_TYPE = getEnvVar("FC_TYPE");
+	std::string OBC_TYPE = getEnvVar("OBC_TYPE"); // Not used. Just for completeness
+	std::string CAM_TYPE = getEnvVar("CAM_TYPE");
 
-	// 
-	if(mode_string == "PX4_SIMULATION"){
-		RCLCPP_INFO(rclcpp::get_logger("main"), "OBC in PX4 SIMULATION mode.");
-		mode = PX4_SIMULATION;
-		file_path =  getHomeDirectory() + "/auspex_params/platform_properties/sim_platform_properties.json";
-	}else if(mode_string == "PX4"){
-		mode = PX4;
-		file_path = getHomeDirectory() + "/auspex_params/platform_properties/platform_properties.json";
-		RCLCPP_INFO(rclcpp::get_logger("main"), "OBC in PX4 mode.");
-	}else if(mode_string == "ANAFI"){
-		mode = ANAFI;
-		file_path = getHomeDirectory() + "/auspex_params/platform_properties/platform_properties.json";
-		RCLCPP_INFO(rclcpp::get_logger("main"), "OBC in ANAFI mode.");
-	}else if(mode_string == "ANAFI_SIMULATION"){
-		mode = ANAFI_SIMULATION;
-		file_path = getHomeDirectory() + "/auspex_params/platform_properties/sim_platform_properties.json";
-		RCLCPP_INFO(rclcpp::get_logger("main"), "OBC in ANAFI SIMULATION mode.");
-	}else{
-		file_path = getHomeDirectory() +"/auspex_params/platform_properties/platform_properties.json";
-		RCLCPP_INFO(rclcpp::get_logger("main"), "OBC in HIL mode.");
-	}
+	file_path =  getHomeDirectory() + "/auspex_params/platform_properties/platform_properties.json";
 
 	// Read in Json file
 	std::ifstream file(file_path);
@@ -172,7 +157,7 @@ int main(int argc, char* argv[]) {
         std::cerr << "Could not open the file " << file_path << std::endl;
         return -1;
     }
-	
+
 	// Parse the JSON content
     json config;
 	try{
@@ -188,7 +173,7 @@ int main(int argc, char* argv[]) {
     }
 
 	// If in simulation mode use command line argument as names
-	if(mode_string.find("SIMULATION") != std::string::npos){
+	if(FC_TYPE.find("SIMULATED") != std::string::npos){
 		if(argv[1]!=NULL && strcmp(argv[1],"--ros-args")!=0){
 			config["platform_id"] = argv[1];
 		}else{
@@ -205,31 +190,33 @@ int main(int argc, char* argv[]) {
 		return -1;
 	}
 
+	std::shared_ptr<VehicleStatusListener_Base> vehicle_listener;
+	std::shared_ptr<VehicleGlobalPositionListener_Base> position_listener;
+	std::shared_ptr<FC_Interface_Base> fc_interface;
 
-	std::shared_ptr<VehicleStatusListener_Base> vehicle_listener; 
-	std::shared_ptr<VehicleGlobalPositionListener_Base> position_listener; 
-	std::shared_ptr<FC_Interface_Base> fc_interface; 
+	RCLCPP_INFO(rclcpp::get_logger("main"), "Platform: %s launching ...", platform_id.c_str());
 
-	if(mode_string.find("PX4") != std::string::npos){
+	if(FC_TYPE.find("PX4") != std::string::npos){
 		vehicle_listener = std::make_shared<VehicleStatusListener_PX4>(platform_id);
 		position_listener = std::make_shared<VehicleGlobalPositionListener_PX4>(platform_id);
 		fc_interface = std::make_shared<FC_Interface_PX4>(vehicle_listener, position_listener, platform_id);
-	}else if(mode_string.find("ANAFI") != std::string::npos){
+	}else if(FC_TYPE.find("ANAFI") != std::string::npos){
 		vehicle_listener = std::make_shared<VehicleStatusListener_ANAFI>(platform_id);
 		position_listener = std::make_shared<VehicleGlobalPositionListener_ANAFI>(platform_id);
 		fc_interface = std::make_shared<FC_Interface_ANAFI>(vehicle_listener, position_listener, platform_id);
 	}
 
-	auto cam_publisher = std::make_shared<CamPublisher>(platform_id);
+	auto cam_publisher = std::make_shared<CamPublisher>(platform_id, 1.0);
 	auto drone_state_publisher = std::make_shared<DroneStatePublisher>(platform_id, config);
 
-	rclcpp::spin_until_future_complete(position_listener, position_listener -> get_next_gps_future());
+	RCLCPP_INFO(rclcpp::get_logger("main"), "Waiting for GPS Position Publisher...");
+	rclcpp::spin_until_future_complete(position_listener, position_listener->get_next_gps_future());
 
 	RCLCPP_INFO(rclcpp::get_logger("main"), "Launching Offboard Control node...");
 	auto controller = std::make_shared<OffboardController>(vehicle_listener, position_listener, fc_interface, drone_state_publisher, cam_publisher, platform_id);
 
-	rclcpp::executors::MultiThreadedExecutor executor;
 
+	rclcpp::executors::MultiThreadedExecutor executor;
 	executor.add_node(vehicle_listener);
 	executor.add_node(position_listener);
 	executor.add_node(cam_publisher);

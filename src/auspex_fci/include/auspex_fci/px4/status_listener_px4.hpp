@@ -6,11 +6,11 @@
 
 class VehicleStatusListener_PX4 : public VehicleStatusListener_Base {
 public:
-    VehicleStatusListener_PX4(std::string name_prefix = "") 
+    VehicleStatusListener_PX4(std::string name_prefix = "")
         : VehicleStatusListener_Base(name_prefix + "_vehicle_status_listener_px4") {
         px4_msgs::msg::BatteryStatus empty_bat_msg{};
         recent_battery_msg = std::make_shared<px4_msgs::msg::BatteryStatus>(std::move(empty_bat_msg));
-        
+
         px4_msgs::msg::VehicleStatus empty_stat_msg{};
         recent_status_msg = std::make_shared<px4_msgs::msg::VehicleStatus>(std::move(empty_stat_msg));
 
@@ -18,7 +18,7 @@ public:
         auto qos = rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 5), qos_profile);
 
         vehicle_command_listener_ = this->create_subscription<px4_msgs::msg::VehicleCommand>(
-            name_prefix + "/fmu/out/vehicle_command", qos, 
+            name_prefix + "/fmu/out/vehicle_command", qos,
             std::bind(&VehicleStatusListener_PX4::vehicle_command_callback, this, _1));
 
         battery_subscription_ = this->create_subscription<px4_msgs::msg::BatteryStatus>(
@@ -27,10 +27,10 @@ public:
                 std::lock_guard<std::mutex> lock(mutex_);
                 recent_battery_msg = std::make_shared<px4_msgs::msg::BatteryStatus>(*msg);
             });
-        
+
         vehicle_subscription_ = this->create_subscription<px4_msgs::msg::VehicleStatus>(
             name_prefix + "/fmu/out/vehicle_status", qos,
-            [this](const px4_msgs::msg::VehicleStatus::UniquePtr msg) {      
+            [this](const px4_msgs::msg::VehicleStatus::UniquePtr msg) {
                 std::lock_guard<std::mutex> lock(mutex_);
                 recent_status_msg = std::make_shared<px4_msgs::msg::VehicleStatus>(*msg);
             });
@@ -39,7 +39,7 @@ public:
     void vehicle_command_callback(const px4_msgs::msg::VehicleCommand::SharedPtr msg) {
         std::lock_guard<std::mutex> lock(mutex_);
         int source = msg->source_system;
-        if (source == 255 && msg->command == 192 && !paused_from_extern) {    
+        if (source == 255 && msg->command == 192 && !paused_from_extern) {
             RCLCPP_INFO(this->get_logger(), "QGroundcontrol send a command -> pausing execution on OBC.");
             paused_from_extern = true;
         } else if (source == 255 && paused_from_extern && msg->command == 176) {

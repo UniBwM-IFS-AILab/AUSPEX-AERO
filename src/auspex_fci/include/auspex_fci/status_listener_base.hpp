@@ -13,7 +13,7 @@ public:
     VehicleStatusListener_Base(const std::string &node_name) : rclcpp::Node(node_name) {
     }
 
-    virtual ~VehicleStatusListener_Base() = default; 
+    virtual ~VehicleStatusListener_Base() = default;
 
     /**
      * @brief gets the recent gps position.

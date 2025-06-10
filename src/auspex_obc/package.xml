@@ -18,11 +18,10 @@
   <depend>rclcpp</depend>
 
   <depend>px4_msgs</depend>
+  <depend>auspex_ocs</depend>
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
-  <depend>cv_bridge</depend>
   <depend>auspex_fci</depend>
-
   <depend>auspex_msgs</depend>
 
   <depend>launch</depend>

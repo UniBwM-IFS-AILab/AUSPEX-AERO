@@ -1,7 +1,7 @@
 # AUSPEX-AERO
 * AUSPEX-AERO &rarr; Onboard Software, including the Offboard Controller
 
-To cite **AUSPEX-AERO**, please use the following reference: 
+To cite **AUSPEX-AERO**, please use the following reference:
 ```
 @article{Doeschl-et-al:2025:AUSPEX,
   author = {Bj{\"o}rn D{\"o}schl and Kai Sommer and Jane Jean Kiam},
