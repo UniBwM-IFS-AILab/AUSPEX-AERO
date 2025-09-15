@@ -146,18 +146,20 @@ void RPI5CamPublisher::captureFrame() {
     }
 
     auto image_msg = FrameData();
-    auto compressed_image_msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", jpg).toCompressedImageMsg();
+    auto compressed_image_msg = std::make_shared<sensor_msgs::msg::CompressedImage>();
+    compressed_image_msg->header = std_msgs::msg::Header();
+    compressed_image_msg->format = "jpeg";
+    compressed_image_msg->data = jpg;
     image_msg.image_compressed = *compressed_image_msg;
-    image_msg.image_compressed.format = "jpeg";
     image_msg.fps = int(fps_);
     image_msg.res_width = transmitWidth_;
     image_msg.res_height = transmitHeight_;
 
     if (gps_listener_) {
         auto g = gps_listener_->get_recent_gps_msg();
-        msg.gps_position.latitude = g->lat;
-        msg.gps_position.longitude = g->lon;
-        msg.gps_position.altitude = g->alt;
+        image_msg.gps_position.latitude  = g->latitude_deg;
+        image_msg.gps_position.longitude = g->longitude_deg;
+        image_msg.gps_position.altitude  = g->absolute_altitude_m;
     }
 
     this->image_publisher_->publish(image_msg);

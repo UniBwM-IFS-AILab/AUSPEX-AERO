@@ -3,6 +3,8 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include "geodetic_converter.hpp"
+#include "auspex_fci/status_listener_base.hpp"
+#include "auspex_fci/position_listener_base.hpp"
 
 
 enum HEADING { WAYPOINT = 1, LEFT_90 = 2, RIGHT_90 = 3, UNCHANGED = 4};
@@ -24,7 +26,7 @@ public:
     /**
 	* @brief Send a command to set the home position of the vehicle (px4)
 	*/
-    virtual void set_home_fc(double latitude, double longitude, double altitude) = 0;
+    virtual void set_home_fc(double lat_deg, double lon_deg, float alt_amsl_m)= 0;
 
     /**
     * @brief Send a command to the vehicle to take off 10 meters <-- altitude is not relative to the ground
@@ -62,19 +64,9 @@ public:
     virtual void publish_offboard_heartbeat() = 0;
 
     /**
-    * @brief Publish a command to let the vehicle hover in a given ned position.
-    */
-    virtual void hover_in_position(double hover_north, double hover_east, double hover_down, double roll, double pitch, double yaw) = 0;
-
-    /**
-    * @brief Publish a command to let the vehicle hover in the current position.
-    */
-    virtual void hover_in_current_position() = 0;
-
-    /**
     * @brief Publish a trajectory setpoint to a gps coordinate returns the distance left to the target while moving towards the target, dont decrease the distances, the target NED trajectory point should stay constant
     */
-    virtual double move_to_gps(double latitude, double longitude, double altitude, HEADING heading) = 0;
+    virtual double move_to_gps(double latitude, double longitude, double altitude, HEADING heading, double speed_ms=3.0) = 0;
 
     /**
     * @brief Publish a trajectory setpoint to a ned coordinate
@@ -84,7 +76,52 @@ public:
     /**
     * @brief Publish a command to circle a poi.
     */
-    virtual double publish_circle_poi(double radius, double espeedast, double latitude, double longitude, double height) = 0;
+    virtual void publish_circle_poi(double radius, double espeedast, double latitude, double longitude, double height) = 0;
+
+    /**
+     * @brief Get the VehicleStatusListener object
+     * @return std::shared_ptr<VehicleStatusListener_Base>
+     */
+    std::shared_ptr<VehicleStatusListener_Base> get_vehicle_status_listener() const {
+        return vehicle_status_listener_;
+    }
+
+    /**
+     * @brief Set the VehicleStatusListener object
+     * @param vehicle_status_listener std::shared_ptr<VehicleStatusListener_Base>
+     */
+    void set_vehicle_status_listener(std::shared_ptr<VehicleStatusListener_Base> vehicle_status_listener) {
+        vehicle_status_listener_ = vehicle_status_listener;
+    }
+
+    /**
+     * @brief Get the VehicleGlobalPositionListener object
+     * @return std::shared_ptr<VehicleGlobalPositionListener_Base>
+     */
+    std::shared_ptr<VehicleGlobalPositionListener_Base> get_position_listener() const {
+        return position_listener_;
+    }
+
+    /**
+     * @brief Set the VehicleGlobalPositionListener object
+     * @param position_listener std::shared_ptr<VehicleGlobalPositionListener_Base>
+     */
+    void set_position_listener(std::shared_ptr<VehicleGlobalPositionListener_Base> position_listener) {
+        position_listener_ = position_listener;
+    }
+
+    bool get_is_initialized() const {
+        return is_initialized_;
+    }
+
+protected:
+    bool is_initialized_ = false;
+    std::string name_prefix_;
+
+    std::shared_ptr<GeodeticConverter> gps_converter_; // Geodetic converter for GPS coordinates
+    std::shared_ptr<VehicleStatusListener_Base> vehicle_status_listener_; // Vehicle status listener
+    std::shared_ptr<VehicleGlobalPositionListener_Base> position_listener_; // Position listener
+
 };
 
 #endif

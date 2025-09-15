@@ -20,14 +20,40 @@ class DroneStatePublisher : public rclcpp::Node {
 public:
     DroneStatePublisher(std::string name_prefix, json& platform_config): Node(name_prefix+ "_" + "drone_state_publisher") {
         name_prefix_ = name_prefix;
-        //TODO: Get configs from platform_config
+
+        json sensor_spec;
+        if (platform_config.contains("sensors") && !platform_config["sensors"].empty()) {
+            if (platform_config["sensors"][0].contains("specifications")) {
+            sensor_spec = platform_config["sensors"][0]["specifications"];
+            }
+        }
+        try{
+
+            sensor_position_.x = sensor_spec["sensor_position"]["x"].get<double>();
+            sensor_position_.y = sensor_spec["sensor_position"]["y"].get<double>();
+            sensor_position_.z = sensor_spec["sensor_position"]["z"].get<double>();
+
+            sensor_orientation_.x = sensor_spec["sensor_orientation"]["roll"].get<double>();
+            sensor_orientation_.y = sensor_spec["sensor_orientation"]["pitch"].get<double>();
+            sensor_orientation_.z = sensor_spec["sensor_orientation"]["yaw"].get<double>();
+
+            fov_hor_ = sensor_spec["fov"]["horizontal"]["max"].get<int>();
+            fov_vert_ = sensor_spec["fov"]["vertical"]["max"].get<int>();
+
+        }catch (const nlohmann::json::parse_error& e) {
+            RCLCPP_ERROR(this->get_logger(), "JSON Parse Error: %s", e.what());
+        } catch (const std::runtime_error& e) {
+            RCLCPP_ERROR(this->get_logger(), "Runtime Error: %s", e.what());
+        } catch (const std::exception& e) {
+            RCLCPP_ERROR(this->get_logger(), "Exception: %s", e.what());
+        }
 
         rmw_qos_profile_t sensor_profile = rmw_qos_profile_sensor_data;
         auto sensor_qos = rclcpp::QoS(
             rclcpp::QoSInitialization(sensor_profile.history, sensor_profile.depth),
             sensor_profile
         );
-        pub_ = this->create_publisher<PlatformState>("/drone_state", sensor_qos);
+        pub_ = this->create_publisher<PlatformState>("/platform_state", sensor_qos);
 
         // Set up a timer to publish every 500ms (2 Hz)
         timer_ = this->create_wall_timer(
@@ -52,62 +78,60 @@ public:
         msg.team_id = "drone_team";          // team ID
 
         // Set platform GPS position (latitude, longitude, altitude in WGS84)
-        msg.platform_gps_position.latitude = this->gps_listener_->get_recent_gps_msg()->lat;  // Latitude
-        msg.platform_gps_position.longitude = this->gps_listener_->get_recent_gps_msg()->lon;  // Longitude
-        msg.platform_gps_position.altitude = this->gps_listener_->get_recent_gps_msg()->alt;  // Altitude in meters amsl
+        msg.platform_gps_position.latitude = this->gps_listener_->get_recent_gps_msg()->latitude_deg;  // Latitude
+        msg.platform_gps_position.longitude = this->gps_listener_->get_recent_gps_msg()->longitude_deg;  // Longitude
+        msg.platform_gps_position.altitude = this->gps_listener_->get_recent_gps_msg()->absolute_altitude_m;  // Altitude in meters amsl
 
         // Set platform pose in world coordinates (position + orientation)
-        msg.platform_pose.position.x = this->gps_listener_->get_recent_ned_msg()->position[0]; // X position in meters
-        msg.platform_pose.position.y = this->gps_listener_->get_recent_ned_msg()->position[1]; // Y position in meters
-        msg.platform_pose.position.z = this->gps_listener_->get_recent_ned_msg()->position[2]; // Z position (altitude) in meters agl
+        msg.platform_pose.position.x = this->gps_listener_->get_recent_ned_msg()->position_body.x_m; // X position in meters
+        msg.platform_pose.position.y = this->gps_listener_->get_recent_ned_msg()->position_body.y_m; // Y position in meters
+        msg.platform_pose.position.z = this->gps_listener_->get_recent_ned_msg()->position_body.z_m; // Z position (altitude) in meters agl
 
-        msg.platform_pose.orientation.x = this->gps_listener_->get_recent_ned_msg()->q[1];
-        msg.platform_pose.orientation.y = this->gps_listener_->get_recent_ned_msg()->q[2];
-        msg.platform_pose.orientation.z = this->gps_listener_->get_recent_ned_msg()->q[3];
-        msg.platform_pose.orientation.w = this->gps_listener_->get_recent_ned_msg()->q[0];
+        double qx = gps_listener_->get_recent_ned_msg()->q.x;
+        double qy = gps_listener_->get_recent_ned_msg()->q.y;
+        double qz = gps_listener_->get_recent_ned_msg()->q.z;
+        double qw = gps_listener_->get_recent_ned_msg()->q.w;
 
-        tf2::Quaternion q(gps_listener_->get_recent_ned_msg()->q[1],gps_listener_->get_recent_ned_msg()->q[2],gps_listener_->get_recent_ned_msg()->q[3],gps_listener_->get_recent_ned_msg()->q[0]);
-        double roll, pitch,yaw;
-        tf2::Matrix3x3 m(q);
-        m.getRPY(roll, pitch, yaw);
+        if (std::isnan(qx) || std::isnan(qy) || std::isnan(qz) || std::isnan(qw)) {
+            RCLCPP_WARN(this->get_logger(), "Quaternion contains NaN, skipping publish.");
+            return;
+        }
+
+        msg.platform_pose.orientation.x = qx;
+        msg.platform_pose.orientation.y = qy;
+        msg.platform_pose.orientation.z = qz;
+        msg.platform_pose.orientation.w = qw;
 
         // Set platform status
-        msg.platform_status = this->gps_listener_->get_recent_platform_state(); //Select from ...
+        msg.platform_status = this->gps_listener_->get_recent_platform_state();
 
         // Set sensor info
-        msg.sensor_id = "Camera001";  // Demo sensor ID
-        msg.sensor_position.x = 0.5;  // 0.5m to the right of the platform
-        msg.sensor_position.y = 0.0;  // Centered on the platform
-        msg.sensor_position.z = 0.0;  // At the same altitude as the platform
+        msg.sensor_id = name_prefix_ + "camera_0";
+        msg.sensor_position = sensor_position_;
 
         // Set the Field of View (FOV) and zoom level
-        msg.fov_hor = 60;  // 60 degrees horizontal FOV
-        msg.fov_vert = 60;    // 60 degrees vertical FOV
-        msg.zoom_level = 0;       // Zoom level 0
+        msg.fov_hor = fov_hor_;
+        msg.fov_vert = fov_vert_;
+        msg.zoom_level = 0;
 
-        // Set gimbal orientation
-        msg.gimbal_orientation.x = 0.0;  // Roll
-        msg.gimbal_orientation.y = -45.0; // Pitch:
-        msg.gimbal_orientation.z = 0.0; // Yaw:
+        // Set gimbal orientation (direction the camera is looking) //TODO get from actual Gimbal
+        msg.gimbal_orientation = sensor_orientation_;
 
-        // Set gimbal angles (elevation and azimuth)
-        msg.elevation_angle = 0.0; //asin(-R31); of R with R = R_z * R_y * R_x R rotation matrices   // to ground
-        msg.azimuth_angle = 0.0; //atan2(R21, R11);    // to true north
+        tf2::Quaternion q(qx, qy, qz, qw);
+        tf2::Matrix3x3 m(q);
+        // Gimbal
+        msg.elevation_angle = std::asin(-m[2][0]) * 180.0 / M_PI; // in degrees to ground
+        msg.azimuth_angle = std::atan2(m[1][0], m[0][0]) * 180.0 / M_PI; // in degrees to North
 
         // Set sensor mode (0 for EO, 1 for IR)
         msg.sensor_mode.value = 0;       // Electro-optical sensor
 
         //Battery Information
         auto current_battery_msg = this->status_listener_->get_battery_msg();
-        msg.battery_state.voltage = current_battery_msg->voltage_v;
-        msg.battery_state.current = current_battery_msg->current_a;
-        msg.battery_state.charge = current_battery_msg->remaining_capacity_wh;
-        msg.battery_state.capacity = current_battery_msg->capacity;
-        msg.battery_state.design_capacity = current_battery_msg->full_charge_capacity_wh;
-        msg.battery_state.percentage = current_battery_msg->remaining;
-        for (int i = 0; i < current_battery_msg->voltage_cell_v.size(); ++i) {
-            msg.battery_state.cell_voltage.push_back(current_battery_msg->voltage_cell_v[i]);
-        }
+        msg.battery_state.voltage = std::isnan(current_battery_msg->voltage_v) ? 0.0f : current_battery_msg->voltage_v;
+        msg.battery_state.current = std::isnan(current_battery_msg->current_battery_a) ? 0.0f : current_battery_msg->current_battery_a;
+        msg.battery_state.percentage = std::isnan(current_battery_msg->remaining_percent) ? 0.0f : current_battery_msg->remaining_percent;
+
         // Publish the message
         pub_->publish(msg);
     }
@@ -136,6 +160,11 @@ private:
     rclcpp::TimerBase::SharedPtr timer_;
     bool timer_running_ = false;
     std::string name_prefix_;
+
+    geometry_msgs::msg::Point sensor_position_;
+    geometry_msgs::msg::Vector3 sensor_orientation_;
+    int fov_hor_;
+    int fov_vert_;
 };
 
 #endif

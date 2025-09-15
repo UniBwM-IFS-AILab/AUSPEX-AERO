@@ -43,5 +43,9 @@ bool CamPublisherBase::isCapturing() const {
 }
 
 void CamPublisherBase::onTimer() {
-    captureFrame();
+    if (capture_mutex_.try_lock()) {
+        captureFrame();
+        capture_mutex_.unlock();
+    }
+    // If mutex is locked, return immediately without blocking
 }

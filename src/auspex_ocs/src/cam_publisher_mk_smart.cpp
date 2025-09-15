@@ -5,6 +5,16 @@ MkSmartCamPublisher::MkSmartCamPublisher(std::string platform_id, const float fp
     stream_url_("rtsp://192.168.144.25:8554/video1"),
     capture_()
 {
+    std::string pipeline =
+        "rtspsrc location=" + stream_url_ +
+        " latency=200 ! rtph265depay ! h265parse ! avdec_h265 ! "
+        "videoconvert ! video/x-raw, format=BGR ! appsink sync=false drop=true max-buffers=1";
+
+    capture_.open(pipeline, cv::CAP_GSTREAMER);
+    if (!capture_.isOpened()) {
+      RCLCPP_ERROR(get_logger(), "Failed to open %s", stream_url_.c_str());
+      return;
+    }
 }
 
 MkSmartCamPublisher::~MkSmartCamPublisher()
@@ -12,24 +22,6 @@ MkSmartCamPublisher::~MkSmartCamPublisher()
     stopCapture();
     if (capture_.isOpened()) {
         capture_.release();
-    }
-}
-
-void MkSmartCamPublisher::startCapture(std::shared_ptr<VehicleGlobalPositionListener_Base> gps_listener)
-{
-    capture_.open(stream_url_, cv::CAP_FFMPEG);
-    if (!capture_.isOpened()) {
-      RCLCPP_ERROR(get_logger(), "Failed to open %s", stream_url_.c_str());
-      return;
-    }
-    CamPublisherBase::startCapture(gps_listener);
-}
-
-void MkSmartCamPublisher::stopCapture()
-{
-    CamPublisherBase::stopCapture();
-    if (capture_.isOpened()) {
-      capture_.release();
     }
 }
 
@@ -55,20 +47,22 @@ void MkSmartCamPublisher::captureFrame()
     }
 
     auto image_msg = FrameData();
-    auto image = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", jpg).toCompressedImageMsg();
+    auto compressed_image_msg = std::make_shared<sensor_msgs::msg::CompressedImage>();
+    compressed_image_msg->header = std_msgs::msg::Header();
+    compressed_image_msg->format = "jpeg";
+    compressed_image_msg->data = jpg;
+    image_msg.image_compressed = *compressed_image_msg;
     image_msg.platform_id = platform_id_;
     image_msg.team_id = "drone_team";
-    image_msg.image_compressed = *image;
-    image_msg.image_compressed.format = "jpeg";
     image_msg.fps = fps_;
     image_msg.res_width = 1280;
     image_msg.res_height = 720;
 
     if (gps_listener_) {
         auto g = gps_listener_->get_recent_gps_msg();
-        msg.gps_position.latitude = g->lat;
-        msg.gps_position.longitude = g->lon;
-        msg.gps_position.altitude = g->alt;
+        image_msg.gps_position.latitude = g->latitude_deg;
+        image_msg.gps_position.longitude = g->longitude_deg;
+        image_msg.gps_position.altitude = g->absolute_altitude_m;
     }
 
     image_publisher_->publish(image_msg);

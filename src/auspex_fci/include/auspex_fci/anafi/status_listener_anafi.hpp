@@ -6,12 +6,11 @@
 class VehicleStatusListener_ANAFI : public VehicleStatusListener_Base {
 public:
 
-    VehicleStatusListener_ANAFI(std::string name_prefix = "") : VehicleStatusListener_Base(name_prefix + "_vehicle_status_listener_anafi") {
-        px4_msgs::msg::BatteryStatus empty_bat_msg{};
-		recent_battery_msg = std::make_shared<px4_msgs::msg::BatteryStatus>(std::move(empty_bat_msg));
-		
-		px4_msgs::msg::VehicleStatus empty_stat_msg{};
-		recent_status_msg = std::make_shared<px4_msgs::msg::VehicleStatus>(std::move(empty_stat_msg));
+    VehicleStatusListener_ANAFI(std::string name_prefix) : VehicleStatusListener_Base(name_prefix + "_vehicle_status_listener_anafi") {
+        mavsdk::Telemetry::Battery empty_bat_msg{};
+		recent_battery_msg = std::make_shared<mavsdk::Telemetry::Battery>(std::move(empty_bat_msg));
+
+		arming_state_ = false;
 
 		rmw_qos_profile_t qos_profile = rmw_qos_profile_sensor_data;
 		auto qos = rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 5), qos_profile);
@@ -20,35 +19,35 @@ public:
      /**
      * @brief gets the recent gps position.
      */
-    px4_msgs::msg::BatteryStatus::SharedPtr get_battery_msg() override {
+    std::shared_ptr<mavsdk::Telemetry::Battery> get_battery_msg() override {
         return recent_battery_msg;
     }
 
     /**
      * @brief gets the recent gps position.
      */
-	px4_msgs::msg::VehicleStatus::SharedPtr get_VehicleStatus_msg() override {
-        return recent_status_msg;
+	bool get_arming_state() override {
+        return arming_state_;
     }
 
     /**
-     * @brief gets the recent gps position.
+     * @brief gets whether the vehicle is paused from an external command.
      */
-	bool get_Paused_from_Extern_msg() override {
+	bool get_paused_from_extern() override {
         return paused_from_extern;
     }
 
     /**
-     * @brief gets the recent gps position.
+     * @brief sets whether the vehicle is paused from an external command.
      */
-	void set_Paused_from_Extern_msg(bool new_paused) override {
+	void set_paused_from_extern(bool new_paused) override {
         paused_from_extern = new_paused;
     }
 
 private:
 
-	px4_msgs::msg::BatteryStatus::SharedPtr recent_battery_msg;
-	px4_msgs::msg::VehicleStatus::SharedPtr recent_status_msg;
+    std::shared_ptr<mavsdk::Telemetry::Battery> recent_battery_msg;
+    bool arming_state_ = false;
 	bool paused_from_extern = false;
 };
 

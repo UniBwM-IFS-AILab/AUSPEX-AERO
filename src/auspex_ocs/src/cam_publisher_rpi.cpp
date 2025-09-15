@@ -41,22 +41,22 @@ void RPICamPublisher::captureFrame() {
     }
 
     // Populate FrameData
-    FrameData msg;
-    msg.platform_id = platform_id_;
-    msg.team_id     = "drone_team";
-    msg.image_compressed.data   = std::move(jpg);
-    msg.image_compressed.header.stamp = get_clock()->now();
-    msg.image_compressed.format = "jpeg";
-    msg.fps        = static_cast<int>(fps_);
-    msg.res_width  = frame.cols;
-    msg.res_height = frame.rows;
+    FrameData image_msg;
+    image_msg.platform_id = platform_id_;
+    image_msg.team_id     = "drone_team";
+    image_msg.image_compressed.data   = std::move(jpg);
+    image_msg.image_compressed.header.stamp = get_clock()->now();
+    image_msg.image_compressed.format = "jpeg";
+    image_msg.fps        = static_cast<int>(fps_);
+    image_msg.res_width  = frame.cols;
+    image_msg.res_height = frame.rows;
 
     if (gps_listener_) {
         auto g = gps_listener_->get_recent_gps_msg();
-        msg.gps_position.latitude  = g->lat;
-        msg.gps_position.longitude = g->lon;
-        msg.gps_position.altitude  = g->alt;
+        image_msg.gps_position.latitude  = g->latitude_deg;
+        image_msg.gps_position.longitude = g->longitude_deg;
+        image_msg.gps_position.altitude  = g->absolute_altitude_m;
     }
 
-    image_publisher_->publish(msg);
+    image_publisher_->publish(image_msg);
 }

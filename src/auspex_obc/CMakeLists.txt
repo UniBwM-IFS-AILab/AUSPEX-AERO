@@ -11,7 +11,6 @@ find_package(ament_cmake REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(px4_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(Eigen3 REQUIRED)
@@ -19,6 +18,7 @@ find_package(tf2_ros REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nlohmann_json 3.2.0 REQUIRED)
 find_package(Boost REQUIRED COMPONENTS program_options)
+find_package(MAVSDK REQUIRED)
 
 find_package(auspex_msgs REQUIRED)
 find_package(auspex_fci REQUIRED)
@@ -71,11 +71,11 @@ set(DEPENDENCIES
   std_msgs
   tf2_ros
   msg_context_cpp
-  px4_msgs
   rclcpp_action
   Eigen3
   auspex_msgs
   sensor_msgs
+  MAVSDK
   auspex_fci
   auspex_ocs
 )
@@ -96,6 +96,7 @@ target_link_libraries(auspex_obc_lib
   ${Boost_LIBRARIES}
   Eigen3::Eigen
   nlohmann_json::nlohmann_json
+  MAVSDK::mavsdk
 )
 
 # auspex_obc
@@ -113,6 +114,9 @@ elseif("${FIRST_CAM}" STREQUAL "RPI")
 elseif("${FIRST_CAM}" STREQUAL "ZT30")
   target_compile_definitions(auspex_obc_lib PRIVATE SWITCH_CAM_HEADER=4)
   target_compile_definitions(auspex_obc PRIVATE SWITCH_CAM_HEADER=4)
+elseif("${FIRST_CAM}" STREQUAL "NONE")
+  target_compile_definitions(auspex_obc_lib PRIVATE SWITCH_CAM_HEADER=0)
+  target_compile_definitions(auspex_obc PRIVATE SWITCH_CAM_HEADER=0)
 endif()
 
 

@@ -25,13 +25,11 @@ OffboardController::OffboardController(	std::shared_ptr<VehicleStatusListener_Ba
 
 	handle_user_command_listener_ =  this->create_subscription<UserCommand>(name_prefix + "/user_command", qos, std::bind(&OffboardController::handle_user_command, this, _1));
 
-	gps_converter_ = std::make_shared<GeodeticConverter>(position_listener_->get_recent_gps_msg()->lat, position_listener_->get_recent_gps_msg()->lon, position_listener_->get_recent_gps_msg()->alt);
-
+	gps_converter_ = std::make_shared<GeodeticConverter>(position_listener_->get_recent_home_msg()->latitude_deg, position_listener_->get_recent_home_msg()->longitude_deg, position_listener_->get_recent_home_msg()->absolute_altitude_m);
 	fc_interface_->set_gps_converter(gps_converter_);
-	position_listener_->set_recent_home_msg();
-	RCLCPP_INFO(this->get_logger(), "Set GPS Origin to configured FC origin (%lf, %lf, %lf)", position_listener_->get_recent_gps_msg()->lat, position_listener_->get_recent_gps_msg()->lon, position_listener_->get_recent_gps_msg()->alt);
+	RCLCPP_INFO(this->get_logger(), "Set GPS Origin to configured FC origin (%lf, %lf, %lf)", position_listener_->get_recent_home_msg()->latitude_deg, position_listener_->get_recent_home_msg()->longitude_deg, position_listener_->get_recent_home_msg()->absolute_altitude_m);
 
-	timer_ = this->create_wall_timer(200ms, std::bind(&OffboardController::timer_callback, this));
+	timer_ = this->create_wall_timer(250ms, std::bind(&OffboardController::publish_heartbeat, this));
 
 	this->start_action_server();
 	this->start_services();
@@ -55,7 +53,7 @@ OffboardController::OffboardController(	std::shared_ptr<VehicleStatusListener_Ba
 	this->position_listener_->set_recent_platform_state("LANDED");
 }
 
-void OffboardController::timer_callback(){
+void OffboardController::publish_heartbeat(){
 	fc_interface_->publish_offboard_heartbeat();
 }
 
@@ -88,7 +86,7 @@ void OffboardController::start_services(){
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void OffboardController::execute_sequence(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle){
 	RCLCPP_INFO(this->get_logger(),"In Execute Sequence" );
-	vehicle_status_listener_->set_Paused_from_Extern_msg(false);
+	vehicle_status_listener_->set_paused_from_extern(false);
 
 	auto executeAtomsVector = goal_handle->get_goal()->execute_atoms;
 	auto result = std::make_shared<ExecuteSequence::Result>();
@@ -107,7 +105,7 @@ void OffboardController::execute_sequence(const std::shared_ptr<rclcpp_action::S
 	int initial_action_count = executeAtomsVector.size();
 	int return_code = OffboardController::RETURN_VALUE::action_critical_failure;
 
-	rclcpp::Rate loop_rate(100);
+	rclcpp::Rate loop_rate(10);
 	rclcpp::Rate loop_rate_slow(1);
 
 	ExecuteAtom atom;
@@ -115,18 +113,15 @@ void OffboardController::execute_sequence(const std::shared_ptr<rclcpp_action::S
 	while(!executeSequenceQueue.empty()){
 		if (goal_handle->is_canceling()) {
 			if(is_flying_){
-				fc_interface_->hover_in_current_position();
+				fc_interface_->publish_position_control_mode();
 			}
 			goal_handle->canceled(result);
 			RCLCPP_INFO(this->get_logger(), "Action Sequence canceled");
 			return;
 		}
-		if(vehicle_status_listener_->get_Paused_from_Extern_msg()){
-			if(is_flying_){
-				fc_interface_->hover_in_current_position(); //roll, pitch, yaw
-			}
-			loop_rate.sleep();
 
+		if(vehicle_status_listener_->get_paused_from_extern()){
+			loop_rate.sleep();
 			publish_position_feedback(goal_handle);
 			continue;
 		}
@@ -134,6 +129,11 @@ void OffboardController::execute_sequence(const std::shared_ptr<rclcpp_action::S
 		execute_queue_lock.lock();
 		atom = executeSequenceQueue.front();
 		execute_queue_lock.unlock();
+
+		if(!is_flying_ && atom.action_type != "take_off" && atom.action_type != "start_detection" && atom.action_type != "stop_detection"){
+			RCLCPP_INFO(this->get_logger(), "Can not execute action %s because the drone is not flying.", atom.action_type.c_str());
+			return;
+		}
 
 		RCLCPP_INFO(this->get_logger(), "Current action in sequence[%d]: %s",current_action_index, atom.action_type.c_str());
 
@@ -160,9 +160,9 @@ void OffboardController::execute_sequence(const std::shared_ptr<rclcpp_action::S
 		else if(atom.action_type == "search_area_uav")
 			return_code = execute_searchArea(goal_handle, &atom);
 		else if(atom.action_type == "start_detection")
-			return_code = execute_startDetection(goal_handle, &atom);
+			return_code = execute_startCapture(goal_handle, &atom);
 		else if(atom.action_type == "stop_detection")
-			return_code = execute_stopDetection(goal_handle, &atom);
+			return_code = execute_stopCapture(goal_handle, &atom);
 		else if(atom.action_type == "capture_image")
 			return_code = execute_takeImage(goal_handle, &atom);
 		else if(atom.action_type == "circle_poi")
@@ -172,7 +172,7 @@ void OffboardController::execute_sequence(const std::shared_ptr<rclcpp_action::S
 		else if(atom.action_type == "hover_left")
 			return_code = execute_hoverLeft(goal_handle, &atom);
 		else if(atom.action_type == "turn")
-			return_code = execute_turn(goal_handle, &atom);
+			return_code = execute_turn_by_angle(goal_handle, &atom);
 		else if(atom.action_type == "fly_at_ground_distance")
 			return_code = execute_flyDistance2Ground(goal_handle, &atom);
 		else if(atom.action_type == "return_home_and_land")
@@ -194,7 +194,7 @@ void OffboardController::execute_sequence(const std::shared_ptr<rclcpp_action::S
 
 		switch (return_code) {
 			case OffboardController::RETURN_VALUE::action_completed:
-				//single action in sequence completed
+
 				current_action_index++;
 				RCLCPP_INFO(this->get_logger(), "Action %d out of %ld in sequence successfully completed", current_action_index, initial_action_count);
 				if(final_action){
@@ -202,65 +202,69 @@ void OffboardController::execute_sequence(const std::shared_ptr<rclcpp_action::S
 					goal_handle->succeed(result);
 				}
 				break;
-			case OffboardController::RETURN_VALUE::goal_succeeded:
-				//entire sequence succeeded handling
-				//instead as condition within OffboardController::RETURN_VALUE::action_completed
-				break;
+
 			case OffboardController::RETURN_VALUE::goal_canceled:
-				//sequence canceled handling
+
 				RCLCPP_INFO(this->get_logger(), "Sequence canceled during action %d out of %ld",(current_action_index+1), initial_action_count);
 				RCLCPP_INFO(this->get_logger(), "Successfully completed %d actions of the sequence",(current_action_index+1));
-				//TODO: put value into canceled result with number of successfully completed actions/index of canceled action
-				//put index in result error code
 				this->publish_position_feedback(goal_handle);
-
 				goal_handle->canceled(result);
 				return ;
+
 			case OffboardController::RETURN_VALUE::action_paused:{
+
 				RCLCPP_INFO(this->get_logger(), "Action Paused from extern. Waiting for resume...");
 				this->camera_publisher_->stopCapture();
 				break;
+
 			}
 			case OffboardController::RETURN_VALUE::action_critical_failure:{
+
 				RCLCPP_INFO(this->get_logger(), "Recent Action failed critically. Engaging failsafe mode");
 				if(is_flying_){
-					fc_interface_->hover_in_current_position();
+					fc_interface_->publish_position_control_mode();
 				}
-				executeSequenceQueue.clear();
-				break;
+				this->publish_position_feedback(goal_handle);
+				goal_handle->canceled(result);
+				return ;
+
 			}
 			case OffboardController::RETURN_VALUE::action_unkown:{
+
 				RCLCPP_INFO(this->get_logger(), "Unknown Action type in sequence. Returning...");
 				if(is_flying_){
-					fc_interface_->hover_in_current_position();
+					fc_interface_->publish_position_control_mode();
 				}
-				executeSequenceQueue.clear();
-				break;
+				this->publish_position_feedback(goal_handle);
+				goal_handle->canceled(result);
+				return ;
+
 			}
 			case OffboardController::RETURN_VALUE::action_failure:{
+
+				if(is_flying_){
+					fc_interface_->publish_position_control_mode();
+				}
 				RCLCPP_INFO(this->get_logger(), "Recent Action failed. Continuing with next action...");
 				break;
+
 			}
 
 		}
 	}//END-WHILE
-	this->publish_position_feedback(goal_handle);
 
+	this->publish_position_feedback(goal_handle);
 	execute_queue_lock.unlock();
 	return ;
 }
 
-int OffboardController::execute_flyHomeAndLand(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action){
+int OffboardController::execute_flyHomeAndLand(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg){
 	RCLCPP_INFO(this->get_logger(),"In execute_flyDistanceGround \n");
-	if(!is_flying_){
-		RCLCPP_WARN(this->get_logger(), "Cannot execute, not flying.");
-		return OffboardController::RETURN_VALUE::action_completed;
-	}
-	int result_atom = 0;
-	result_atom = this->execute_waypoint3D_step(goal_handle, execute_msg);//amsl
+
+	int result_atom = this->execute_waypoint3D_step(goal_handle, execute_msg);//amsl
 
 	if(result_atom == OffboardController::RETURN_VALUE::action_completed){
-		execute_msg->goal_pose.position.altitude = position_listener_->get_recent_home_msg()->alt + 4;
+		execute_msg->goal_pose.position.altitude = position_listener_->get_recent_home_msg()->absolute_altitude_m + 4;
 		execute_msg->altitude_level.value = AltitudeLevel::AMSL;
 		result_atom = this->execute_descend(goal_handle, execute_msg);
 
@@ -271,40 +275,30 @@ int OffboardController::execute_flyHomeAndLand(const std::shared_ptr<rclcpp_acti
 	return result_atom;
 }
 
-int OffboardController::execute_flyDistance2Ground(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action){
+int OffboardController::execute_flyDistance2Ground(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg){
 	RCLCPP_INFO(this->get_logger(),"In execute_flyDistanceGround \n");
-	if(!is_flying_){
-		RCLCPP_WARN(this->get_logger(), "Cannot execute, not flying.");
-		return OffboardController::RETURN_VALUE::action_completed;
+
+	if(!fc_interface_->publish_offboard_control_mode()){
+		return OffboardController::RETURN_VALUE::action_paused;
 	}
+
 	geographic_msgs::msg::GeoPose pose;
 	pose = execute_msg->goal_pose;
 	// TODO
 	return OffboardController::RETURN_VALUE::action_completed;
 }
 
-int OffboardController::execute_hoverLeft(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action){
+int OffboardController::execute_hoverLeft(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg){
 	RCLCPP_INFO(this->get_logger(),"In hover_left \n");
-	if(!is_flying_){
-		RCLCPP_WARN(this->get_logger(), "Cannot execute, not flying.");
-		return OffboardController::RETURN_VALUE::action_completed;
-	}
-	fc_interface_->publish_offboard_heartbeat();
-
-	if(!fc_interface_->publish_offboard_control_mode()){
-		if(checkForExternalCommand()){
-			return OffboardController::RETURN_VALUE::action_paused;
-		}
-	}
 
 	double north, east, down;
-	gps_converter_->geodetic2Ned(execute_msg->goal_pose.position.latitude, execute_msg->goal_pose.position.longitude, position_listener_->get_recent_gps_msg()->alt, &north, &east, &down); // given alt above mean sea level
+	gps_converter_->geodetic2Ned(execute_msg->goal_pose.position.latitude, execute_msg->goal_pose.position.longitude, position_listener_->get_recent_gps_msg()->absolute_altitude_m, &north, &east, &down); // given alt above mean sea level
 
 	double current_north, current_east, current_down;
 	// receive current NED coordinates from FC
-	current_north = position_listener_->get_recent_ned_msg()->position[0];
-	current_east = position_listener_->get_recent_ned_msg()->position[1];
-	current_down = position_listener_->get_recent_ned_msg()->position[2];
+	current_north = position_listener_->get_recent_ned_msg()->position_body.x_m;
+	current_east = position_listener_->get_recent_ned_msg()->position_body.y_m;
+	current_down = position_listener_->get_recent_ned_msg()->position_body.z_m;
 
 	north = gps_converter_->discretize(north,5.0);
 	east = gps_converter_->discretize(east,5.0);
@@ -325,39 +319,37 @@ int OffboardController::execute_hoverLeft(const std::shared_ptr<rclcpp_action::S
 
 	int result_atom = this->execute_turn2angle(goal_handle, execute_msg);
 
-	if(result_atom == OffboardController::RETURN_VALUE::goal_canceled || result_atom == OffboardController::RETURN_VALUE::action_paused){
+	if(result_atom != OffboardController::RETURN_VALUE::action_completed){
 		return result_atom;
 	}
 
 	//Now hover to position
-	rclcpp::Rate loop_rate(100);
+	rclcpp::Rate loop_rate(5);
 	auto result = std::make_shared<ExecuteSequence::Result>();
 
-	fc_interface_->publish_offboard_heartbeat();
-	if(!fc_interface_->publish_offboard_control_mode()){if(checkForExternalCommand()){return OffboardController::RETURN_VALUE::action_paused;}}
+	if(!fc_interface_->publish_offboard_control_mode()){
+		return OffboardController::RETURN_VALUE::action_paused;
+	}
 
-	double distance = 0;
-	double max_distance = 100;
+	double distance = 0.0;
+	double max_distance = 30;
 
 	while (rclcpp::ok()) {
 		loop_rate.sleep();
 		geographic_msgs::msg::GeoPose intermediate_goal = execute_msg->goal_pose;
-		double total_distance = gps_converter_->geodeticDistance(position_listener_->get_recent_gps_msg()->lat, position_listener_->get_recent_gps_msg()->lon, intermediate_goal.position.latitude, intermediate_goal.position.longitude);
+		double current_distance = gps_converter_->geodeticDistance(position_listener_->get_recent_gps_msg()->latitude_deg, position_listener_->get_recent_gps_msg()->longitude_deg, intermediate_goal.position.latitude, intermediate_goal.position.longitude);
 
-		if (total_distance > max_distance) {
-			double fraction = max_distance / total_distance;
-			intermediate_goal.position.latitude = position_listener_->get_recent_gps_msg()->lat + fraction * (intermediate_goal.position.latitude -  position_listener_->get_recent_gps_msg()->lat);
-    		intermediate_goal.position.longitude = position_listener_->get_recent_gps_msg()->lon + fraction * (intermediate_goal.position.longitude - position_listener_->get_recent_gps_msg()->lon);
+		if (current_distance > max_distance) {
+			double fraction = max_distance / current_distance;
+			intermediate_goal.position.latitude = position_listener_->get_recent_gps_msg()->latitude_deg + fraction * (intermediate_goal.position.latitude -  position_listener_->get_recent_gps_msg()->latitude_deg);
+    		intermediate_goal.position.longitude = position_listener_->get_recent_gps_msg()->longitude_deg + fraction * (intermediate_goal.position.longitude - position_listener_->get_recent_gps_msg()->longitude_deg);
 		}
 
-		distance = fc_interface_->move_to_gps(intermediate_goal.position.latitude, intermediate_goal.position.longitude, position_listener_->get_recent_gps_msg()->alt, HEADING::UNCHANGED);//alt amsl
+		distance = fc_interface_->move_to_gps(intermediate_goal.position.latitude, intermediate_goal.position.longitude, position_listener_->get_recent_gps_msg()->absolute_altitude_m, HEADING::UNCHANGED, execute_msg->speed_m_s);//alt amsl
 
 		if (goal_handle->is_canceling()) {
 			if(is_flying_){
-				fc_interface_->hover_in_current_position();
-			}
-			if(final_action){
-				goal_handle->canceled(result);
+				fc_interface_->publish_position_control_mode();
 			}
 			return OffboardController::RETURN_VALUE::goal_canceled;
 		}
@@ -366,43 +358,27 @@ int OffboardController::execute_hoverLeft(const std::shared_ptr<rclcpp_action::S
 			return OffboardController::RETURN_VALUE::action_paused;
 		}
 
-		// normally distance <= 5
 		if (rclcpp::ok() && distance <= 0.5) {
 			loop_rate.sleep();
 			RCLCPP_DEBUG(this->get_logger(), "Hovering left to current waypoint succeeded");
-			if(final_action){
-				RCLCPP_DEBUG(this->get_logger(), "in final action");
-				goal_handle->succeed(result);
-				return OffboardController::RETURN_VALUE::goal_succeeded;
-			}
 			break;
 		}
 	}
 	return OffboardController::RETURN_VALUE::action_completed;
 }
 
-int OffboardController::execute_hoverRight(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action){
-	if(!is_flying_){
-		RCLCPP_WARN(this->get_logger(), "Cannot execute, not flying.");
-		return OffboardController::RETURN_VALUE::action_completed;
-	}
+int OffboardController::execute_hoverRight(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg){
+
 	RCLCPP_INFO(this->get_logger(),"In hover_right \n");
 
-	fc_interface_->publish_offboard_heartbeat();
-	if(!fc_interface_->publish_offboard_control_mode()){
-		if(checkForExternalCommand()){
-			return OffboardController::RETURN_VALUE::action_paused;
-		}
-	}
-
 	double north, east, down;
-	gps_converter_->geodetic2Ned(execute_msg->goal_pose.position.latitude, execute_msg->goal_pose.position.longitude, position_listener_->get_recent_gps_msg()->alt, &north, &east, &down);
+	gps_converter_->geodetic2Ned(execute_msg->goal_pose.position.latitude, execute_msg->goal_pose.position.longitude, position_listener_->get_recent_gps_msg()->absolute_altitude_m, &north, &east, &down);
 
 	double current_north, current_east, current_down;
 	// receive current NED coordinates from FC
-	current_north = position_listener_->get_recent_ned_msg()->position[0];
-	current_east = position_listener_->get_recent_ned_msg()->position[1];
-	current_down = position_listener_->get_recent_ned_msg()->position[2];
+	current_north = position_listener_->get_recent_ned_msg()->position_body.x_m;
+	current_east = position_listener_->get_recent_ned_msg()->position_body.y_m;
+	current_down = position_listener_->get_recent_ned_msg()->position_body.z_m;
 
 	north = gps_converter_->discretize(north,5.0);
 	east = gps_converter_->discretize(east,5.0);
@@ -423,43 +399,37 @@ int OffboardController::execute_hoverRight(const std::shared_ptr<rclcpp_action::
 
 	int result_atom = this->execute_turn2angle(goal_handle, execute_msg);
 
-	if(result_atom == OffboardController::RETURN_VALUE::goal_canceled || result_atom == OffboardController::RETURN_VALUE::action_paused){
+	if(result_atom != OffboardController::RETURN_VALUE::action_completed){
 		return result_atom;
 	}
 
 	//Now hover to position
-	rclcpp::Rate loop_rate(100);
+	rclcpp::Rate loop_rate(5);
 	auto result = std::make_shared<ExecuteSequence::Result>();
 
-	fc_interface_->publish_offboard_heartbeat();
 	if(!fc_interface_->publish_offboard_control_mode()){
-		if(checkForExternalCommand()){
-			return OffboardController::RETURN_VALUE::action_paused;
-		}
+		return OffboardController::RETURN_VALUE::action_paused;
 	}
 
-	double distance = 0;
-	double max_distance = 100.0;
+	double distance = 0.0;
+	double max_distance = 30.0;
 
 	while (rclcpp::ok()) {
 		loop_rate.sleep();
 		geographic_msgs::msg::GeoPose intermediate_goal = execute_msg->goal_pose;
-		double total_distance = gps_converter_->geodeticDistance(position_listener_->get_recent_gps_msg()->lat, position_listener_->get_recent_gps_msg()->lon, intermediate_goal.position.latitude, intermediate_goal.position.longitude);
+		double current_distance = gps_converter_->geodeticDistance(position_listener_->get_recent_gps_msg()->latitude_deg, position_listener_->get_recent_gps_msg()->longitude_deg, intermediate_goal.position.latitude, intermediate_goal.position.longitude);
 
-		if (total_distance > max_distance) {
-			double fraction = max_distance / total_distance;
-			intermediate_goal.position.latitude = position_listener_->get_recent_gps_msg()->lat + fraction * (intermediate_goal.position.latitude -  position_listener_->get_recent_gps_msg()->lat);
-    		intermediate_goal.position.longitude = position_listener_->get_recent_gps_msg()->lon + fraction * (intermediate_goal.position.longitude - position_listener_->get_recent_gps_msg()->lon);
+		if (current_distance > max_distance) {
+			double fraction = max_distance / current_distance;
+			intermediate_goal.position.latitude = position_listener_->get_recent_gps_msg()->latitude_deg + fraction * (intermediate_goal.position.latitude -  position_listener_->get_recent_gps_msg()->latitude_deg);
+    		intermediate_goal.position.longitude = position_listener_->get_recent_gps_msg()->longitude_deg + fraction * (intermediate_goal.position.longitude - position_listener_->get_recent_gps_msg()->longitude_deg);
 		}
 
-		distance = fc_interface_->move_to_gps(intermediate_goal.position.latitude, intermediate_goal.position.longitude, position_listener_->get_recent_gps_msg()->alt, HEADING::UNCHANGED);//alt above mean sea level
+		distance = fc_interface_->move_to_gps(intermediate_goal.position.latitude, intermediate_goal.position.longitude, position_listener_->get_recent_gps_msg()->absolute_altitude_m, HEADING::UNCHANGED, execute_msg->speed_m_s);//alt above mean sea level
 
 		if (goal_handle->is_canceling()) {
 			if(is_flying_){
-				fc_interface_->hover_in_current_position();
-			}
-			if(final_action){
-				goal_handle->canceled(result);
+				fc_interface_->publish_position_control_mode();
 			}
 			return OffboardController::RETURN_VALUE::goal_canceled;
 		}
@@ -468,27 +438,17 @@ int OffboardController::execute_hoverRight(const std::shared_ptr<rclcpp_action::
 			return OffboardController::RETURN_VALUE::action_paused;
 		}
 
-		// normally distance <= 5
 		if (rclcpp::ok() && distance <= 0.5) {
 			loop_rate.sleep();
 			RCLCPP_DEBUG(this->get_logger(), "hovering right to current waypoint succeeded");
-			if(final_action){
-				RCLCPP_DEBUG(this->get_logger(), "in final action");
-				goal_handle->succeed(result);
-				return OffboardController::RETURN_VALUE::goal_succeeded;
-			}
 			break;
 		}
 	}
 	return OffboardController::RETURN_VALUE::action_completed;
 }
 
-int OffboardController::execute_turn(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action){
+int OffboardController::execute_turn_by_angle(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg){
 	RCLCPP_INFO(this->get_logger(),"In execute_turn \n");
-	if(!is_flying_){
-		RCLCPP_WARN(this->get_logger(), "Cannot execute, not flying.");
-		return OffboardController::RETURN_VALUE::action_completed;
-	}
 
 	tf2::Quaternion q_goal(	execute_msg->goal_pose.orientation.x,
 							execute_msg->goal_pose.orientation.y,
@@ -496,11 +456,7 @@ int OffboardController::execute_turn(const std::shared_ptr<rclcpp_action::Server
 							execute_msg->goal_pose.orientation.w);
 
 	double roll, pitch, yaw, goal_yaw;
-
-	fc_interface_->publish_offboard_heartbeat();
-	if(!fc_interface_->publish_offboard_control_mode()){if(checkForExternalCommand()){return OffboardController::RETURN_VALUE::action_paused;}}
-
-	tf2::Quaternion q(position_listener_->get_recent_ned_msg()->q[1],position_listener_->get_recent_ned_msg()->q[2],position_listener_->get_recent_ned_msg()->q[3],position_listener_->get_recent_ned_msg()->q[0]);
+	tf2::Quaternion q(position_listener_->get_recent_ned_msg()->q.x,position_listener_->get_recent_ned_msg()->q.y,position_listener_->get_recent_ned_msg()->q.z,position_listener_->get_recent_ned_msg()->q.w);
 	q = q * q_goal; //add to current orientation
 
 	execute_msg->goal_pose.orientation.x = q.x();
@@ -508,19 +464,20 @@ int OffboardController::execute_turn(const std::shared_ptr<rclcpp_action::Server
 	execute_msg->goal_pose.orientation.z = q.z();
 	execute_msg->goal_pose.orientation.w = q.w();
 
-	int result_atom = this->execute_turn2angle(goal_handle, execute_msg);
-
-	return result_atom;
+	return this->execute_turn2angle(goal_handle, execute_msg);
 }
 
-int OffboardController::execute_turn2angle(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action){
-	if(!is_flying_){
-		RCLCPP_WARN(this->get_logger(), "Cannot execute, not flying.");
-		return OffboardController::RETURN_VALUE::action_completed;
+int OffboardController::execute_turn2angle(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg){
+
+	RCLCPP_INFO(this->get_logger(),"In execute_turn2angle \n");
+
+	if(!fc_interface_->publish_offboard_control_mode()){
+		return OffboardController::RETURN_VALUE::action_paused;
 	}
-	double x = position_listener_->get_recent_ned_msg()->position[0];
-	double y = position_listener_->get_recent_ned_msg()->position[1];
-	double z = position_listener_->get_recent_ned_msg()->position[2];
+
+	double x = position_listener_->get_recent_ned_msg()->position_body.x_m;
+	double y = position_listener_->get_recent_ned_msg()->position_body.y_m;
+	double z = position_listener_->get_recent_ned_msg()->position_body.z_m;
 	double roll, pitch , yaw, goal_yaw;
 
 	tf2::Quaternion q(execute_msg->goal_pose.orientation.x,execute_msg->goal_pose.orientation.y, execute_msg->goal_pose.orientation.z, execute_msg->goal_pose.orientation.w);
@@ -529,25 +486,21 @@ int OffboardController::execute_turn2angle(const std::shared_ptr<rclcpp_action::
 	m.getRPY(roll, pitch, goal_yaw);
 
 	if(is_flying_){
-		fc_interface_->hover_in_position(x, y, z,0.0,0.0,goal_yaw);
+		fc_interface_->move_to_ned(x, y, z,0.0,0.0,goal_yaw);
 	}else{
-		return OffboardController::RETURN_VALUE::action_completed;
+		return OffboardController::RETURN_VALUE::action_critical_failure;
 	}
 
 	int tick_count= 0;
-	rclcpp::Rate loop_rate(10);
+	rclcpp::Rate loop_rate(5);
 	auto result = std::make_shared<ExecuteSequence::Result>();
 
 	while (rclcpp::ok()){
 		loop_rate.sleep();
 
-		// set result to canceled; if part of an action sequence, check separately in calling funtion if canceled from within here
 		if (goal_handle->is_canceling()) {
 			if(is_flying_){
-				fc_interface_->hover_in_current_position();
-			}// if hover canceled hover in position :)
-			if(final_action){
-				goal_handle->canceled(result);
+				fc_interface_->publish_position_control_mode();
 			}
 			return OffboardController::RETURN_VALUE::goal_canceled;
 		}
@@ -556,7 +509,7 @@ int OffboardController::execute_turn2angle(const std::shared_ptr<rclcpp_action::
 			return OffboardController::RETURN_VALUE::action_paused;
 		}
 
-		tf2::Quaternion q(position_listener_->get_recent_ned_msg()->q[1],position_listener_->get_recent_ned_msg()->q[2],position_listener_->get_recent_ned_msg()->q[3],position_listener_->get_recent_ned_msg()->q[0]);
+		tf2::Quaternion q(position_listener_->get_recent_ned_msg()->q.x, position_listener_->get_recent_ned_msg()->q.y, position_listener_->get_recent_ned_msg()->q.z, position_listener_->get_recent_ned_msg()->q.w);
 		tf2::Matrix3x3 m(q);
 		m.getRPY(roll, pitch, yaw);
 
@@ -567,10 +520,6 @@ int OffboardController::execute_turn2angle(const std::shared_ptr<rclcpp_action::
 		if (rclcpp::ok()  && tick_count > 4) {
 			loop_rate.sleep();
 			RCLCPP_INFO(this->get_logger(), "Turn in position succeeded.");
-			if(final_action){
-				goal_handle->succeed(result);
-				return OffboardController::RETURN_VALUE::goal_succeeded;
-			}
 			break;
 		}
 	}
@@ -580,115 +529,84 @@ int OffboardController::execute_turn2angle(const std::shared_ptr<rclcpp_action::
 /**
  * @brief only works with FC at the moment.
  */
-int OffboardController::execute_CirclePoI(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action){
+int OffboardController::execute_CirclePoI(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg){
+
 	RCLCPP_INFO(this->get_logger(),"In execute_CirclePoI \n");
-	if(!is_flying_){
-		RCLCPP_WARN(this->get_logger(), "Cannot execute, not flying.");
-		return OffboardController::RETURN_VALUE::action_completed;
-	}
-
-	double height = execute_msg->goal_pose.position.altitude;
-	double goal_height = 0.0;
-
-	if(execute_msg->altitude_level.value == AltitudeLevel::AMSL){
-		goal_height = height - position_listener_->get_recent_home_msg()->alt;
-	}else if (execute_msg->altitude_level.value == AltitudeLevel::AGL){
-		if(this->is_height_data_available){
-			goal_height = (this->get_groundHeight_amsl() + height) - position_listener_->get_recent_home_msg()->alt;
-		}else{
-			RCLCPP_WARN(this->get_logger(), "Height data not available... flying above ground not recommended.");
-		}
-	}else{
-		//Relative
-		goal_height = position_listener_->get_recent_ned_msg()->position[2] + height;
-	}
-
-	int loop_rate_ = 100;
-	double ms_per_loop = loop_rate_/1000;
-	rclcpp::Rate loop_rate(loop_rate_);
-
-	auto result = std::make_shared<ExecuteSequence::Result>();
 
 	if(checkForExternalCommand()){
 		return OffboardController::RETURN_VALUE::action_paused;
 	}
 
-	double distance = 0;
+	double goal_height = execute_msg->goal_pose.position.altitude;
+	switch (execute_msg->altitude_level.value) {
+		case AltitudeLevel::AMSL:
+			goal_height -= position_listener_->get_recent_home_msg()->absolute_altitude_m;
+			break;
+		case AltitudeLevel::AGL:
+			if (is_height_data_available) {
+				goal_height = (get_groundHeight_amsl() + goal_height) - position_listener_->get_recent_home_msg()->absolute_altitude_m;
+			} else {
+				RCLCPP_WARN(this->get_logger(), "Height data not available... flying above ground not recommended.");
+			}
+			break;
+		case AltitudeLevel::REL:
+			goal_height = position_listener_->get_recent_ned_msg()->position_body.z_m + goal_height;
+			break;
+		default:
+			RCLCPP_ERROR(this->get_logger(), "Unknown altitude level: %d", execute_msg->altitude_level.value);
+			return OffboardController::RETURN_VALUE::action_critical_failure;
+	}
+
+	rclcpp::Rate loop_rate(5);
+	auto result = std::make_shared<ExecuteSequence::Result>();
+
+	double distance = 0.0;
 	int current_times = 0;
 
-	fc_interface_->publish_circle_poi(execute_msg->radius, execute_msg->speed, position_listener_->get_recent_gps_msg()->lat, position_listener_->get_recent_gps_msg()->lon, goal_height);
-
 	//uint16 VEHICLE_CMD_DO_ORBIT = 34	Radius [m] |Velocity [m/s] |Yaw behaviour |Empty |latitude/X |longitude/Y |Altitude/Z |
+	fc_interface_->publish_circle_poi(execute_msg->radius, execute_msg->speed_m_s, position_listener_->get_recent_gps_msg()->latitude_deg, position_listener_->get_recent_gps_msg()->longitude_deg, goal_height);
 
 	auto start_time = this->get_clock()->now();
 	auto current_time = this->get_clock()->now();
 
-	this->execute_startDetection(goal_handle, execute_msg);
+	this->execute_startCapture(goal_handle, execute_msg);
 
 	while (rclcpp::ok()) {
 		loop_rate.sleep();
-		// set result to canceled; if part of an action sequence, check separately in calling funtion if canceled from within here
+
 		if (goal_handle->is_canceling()) {
 			if(is_flying_){
-				fc_interface_->hover_in_current_position();
+				fc_interface_->publish_position_control_mode();
 			}
-			if(final_action){
-				goal_handle->canceled(result);
-			}
-			fc_interface_->publish_offboard_control_mode();
-			fc_interface_->publish_offboard_heartbeat();
 			RCLCPP_INFO(this->get_logger(), "Canceled Circle POI");
-			this->execute_stopDetection(goal_handle, execute_msg);
+			this->execute_stopCapture(goal_handle, execute_msg);
 			return OffboardController::RETURN_VALUE::goal_canceled;
 		}
 
 		if(checkForExternalCommand()){
-			fc_interface_->publish_offboard_heartbeat();
-			fc_interface_->publish_offboard_control_mode();
-			this->execute_stopDetection(goal_handle, execute_msg);
-			fc_interface_->hover_in_current_position();
+			this->execute_stopCapture(goal_handle, execute_msg);
+			fc_interface_->publish_position_control_mode();
 			return OffboardController::RETURN_VALUE::action_paused;
 		}
 
 		current_time = this->get_clock()->now();
-
-		// normally distance <= 5
 		if (rclcpp::ok() && ((current_time - start_time).nanoseconds()/1000000.0 > (execute_msg->hover_duration))) {
 			loop_rate.sleep();
-			if(final_action){
-				goal_handle->succeed(result);
-				fc_interface_->publish_offboard_heartbeat();
-				if(!fc_interface_->publish_offboard_control_mode()){
-					if(checkForExternalCommand()){
-						this->execute_stopDetection(goal_handle, execute_msg);
-						return OffboardController::RETURN_VALUE::action_paused;
-					}
-				}
-				this->execute_stopDetection(goal_handle, execute_msg);
-				return OffboardController::RETURN_VALUE::goal_succeeded;
-			}
 			break;
 		}
 	}
 
-
-	fc_interface_->publish_offboard_heartbeat();
 	fc_interface_->publish_position_control_mode();
 	fc_interface_->publish_offboard_control_mode();
-	fc_interface_->hover_in_current_position();
-	this->execute_stopDetection(goal_handle, execute_msg);
+	fc_interface_->publish_position_control_mode();
+	this->execute_stopCapture(goal_handle, execute_msg);
 	return OffboardController::RETURN_VALUE::action_completed;
 }
 
-int OffboardController::execute_flyAboveHeighestPoint(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action){
+int OffboardController::execute_flyAboveHeighestPoint(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg){
 	RCLCPP_INFO(this->get_logger(),"In execute_flyAboveHeighestPoint \n");
-	if(!is_flying_){
-		RCLCPP_WARN(this->get_logger(), "Cannot execute, not flying.");
-		return OffboardController::RETURN_VALUE::action_completed;
-	}
 
-	double current_alt = position_listener_->get_recent_gps_msg()->alt;
-
+	double current_alt = position_listener_->get_recent_gps_msg()->absolute_altitude_m;
 	int result_atom = 0;
 	if(current_alt > execute_msg->goal_pose.position.altitude){
 		result_atom = this->execute_waypoint2D(goal_handle, execute_msg);
@@ -703,24 +621,52 @@ int OffboardController::execute_flyAboveHeighestPoint(const std::shared_ptr<rclc
 	}else{
 		result_atom = this->execute_waypoint2D(goal_handle, execute_msg);
 	}
-
 	return result_atom;
 }
 
-int OffboardController::execute_searchArea(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action) {
-    RCLCPP_INFO(this->get_logger(), "Executing search area...");
-	if(!is_flying_){
-		RCLCPP_WARN(this->get_logger(), "Cannot execute, not flying.");
-		return OffboardController::RETURN_VALUE::action_completed;
+int OffboardController::execute_scanArea(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg){
+
+	RCLCPP_INFO(this->get_logger(), "In execute_scanArea");
+
+	auto result = std::make_shared<ExecuteSequence::Result>();
+	double scan_height = execute_msg->height - position_listener_->get_recent_home_msg()->absolute_altitude_m;
+	execute_msg->altitude_level.value = AltitudeLevel::AMSL;
+	std::vector<geometry_msgs::msg::Pose2D> polygon_vertices = execute_msg->scan_polygon_vertices;
+
+	//the sensor FOV in degree
+	double sensor_fov_hor = 30;// 30 degree means +/- 15
+	double sensor_fov_vert = 30;
+
+	//compute footprint
+	double sensor_height = (tan(((sensor_fov_hor/2.0)*M_PI)/180.0) * scan_height) * 2.0;//in metres
+	double sensor_width = (tan(((sensor_fov_vert/2.0)*M_PI)/180.0) * scan_height) * 2.0;//in metres
+
+	//abort if there are not enough vertices given
+	if(polygon_vertices.size() < 3){
+		RCLCPP_ERROR(this->get_logger(), "Error: Not enough vertices specified for scanning.");
+		return OffboardController::RETURN_VALUE::action_failure;
 	}
+	std::vector<Vector3D> scanWaypoints = this->get_scanWaypoints(execute_msg->height, sensor_width, polygon_vertices);
+	std::vector<ExecuteAtom> executeAtoms_wp = generateFlyAtomFromVector(scanWaypoints);
+
+	for(auto &wp: executeAtoms_wp){
+		int result_atom = execute_waypoint3D(goal_handle, &wp);
+		if(result_atom == OffboardController::RETURN_VALUE::action_completed){
+			continue;
+		}else{
+			return result_atom;
+		}
+	}
+	RCLCPP_INFO(this->get_logger(), "Successfully scanned the specified area.");
+	return OffboardController::RETURN_VALUE::action_completed;
+}
+
+int OffboardController::execute_searchArea(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg) {
+    RCLCPP_INFO(this->get_logger(), "Executing search area...");
 
     auto result = std::make_shared<ExecuteSequence::Result>();
-
-    // Compute scan height relative to home altitude
-    double scan_height = execute_msg->height - position_listener_->get_recent_home_msg()->alt;
+    double scan_height = execute_msg->height - position_listener_->get_recent_home_msg()->absolute_altitude_m;
     execute_msg->altitude_level.value = AltitudeLevel::AMSL;
-
-    // Get polygon scan area vertices
     std::vector<geometry_msgs::msg::Pose2D> polygon_vertices = execute_msg->scan_polygon_vertices;
 
     // Sensor FOV (horizontal & vertical) in degrees
@@ -731,24 +677,19 @@ int OffboardController::execute_searchArea(const std::shared_ptr<rclcpp_action::
     double sensor_width = 2.0 * tan((SENSOR_FOV_HOR / 2.0) * M_PI / 180.0) * scan_height;
     double sensor_height = 2.0 * tan((SENSOR_FOV_VERT / 2.0) * M_PI / 180.0) * scan_height;
 
-    // Validate input: At least 3 vertices required
     if (polygon_vertices.size() < 3) {
         RCLCPP_ERROR(this->get_logger(), "Error: Not enough vertices specified for scanning.");
         return OffboardController::RETURN_VALUE::action_failure;
     }
 
-    // Generate waypoints for scanning
-    std::vector<Vector3D> scanWaypoints = get_scanWaypoints(execute_msg->height, sensor_width, polygon_vertices);
-    std::vector<ExecuteAtom> executeAtoms_wp = generateFlyAtomFromVector(scanWaypoints);
-
+    std::vector<Vector3D> scanWaypoints = this->get_scanWaypoints(execute_msg->height, sensor_width, polygon_vertices);
+    std::vector<ExecuteAtom> executeAtoms_wp = this->generateFlyAtomFromVector(scanWaypoints);
     RCLCPP_INFO(this->get_logger(), "Searching for object at height: %f meters", scan_height);
-
-    // Start detection
-    execute_startDetection(goal_handle, execute_msg);
+    this->execute_startCapture(goal_handle, execute_msg);
 
     int finished_wp = 0;
     for (auto &wp : executeAtoms_wp) {
-        int result_atom = execute_waypoint3D_step(goal_handle, &wp);
+        int result_atom = this->execute_waypoint3D_step(goal_handle, &wp);
 
         if (result_atom == OffboardController::RETURN_VALUE::action_completed) {
             finished_wp++;
@@ -775,7 +716,6 @@ int OffboardController::execute_searchArea(const std::shared_ptr<rclcpp_action::
                 y_max = std::max(y_max, waypoint.getY());
             }
 
-            // Create bounding box polygon
             std::vector<geometry_msgs::msg::Pose2D> poses;
 			poses.emplace_back();
 			poses.back().x = x_min;
@@ -792,64 +732,32 @@ int OffboardController::execute_searchArea(const std::shared_ptr<rclcpp_action::
 			poses.emplace_back();
 			poses.back().x = x_max;
 			poses.back().y = y_min;
-
-
-            // Update scan polygon in queue safely
             {
                 std::lock_guard<std::mutex> lock(execute_queue_lock);
                 if (!executeSequenceQueue.empty()) {
                     executeSequenceQueue.front().scan_polygon_vertices = poses;
                 }
             }
-
-            // Stop detection and return
-            execute_stopDetection(goal_handle, execute_msg);
+            this->execute_stopCapture(goal_handle, execute_msg);
             return result_atom;
         }
         else {
-            // Stop detection if action failed
-            execute_stopDetection(goal_handle, execute_msg);
+            this->execute_stopCapture(goal_handle, execute_msg);
             return result_atom;
         }
     }
 
-    // Stop detection and complete action
-    execute_stopDetection(goal_handle, execute_msg);
+    this->execute_stopCapture(goal_handle, execute_msg);
     return OffboardController::RETURN_VALUE::action_completed;
 }
 
+int OffboardController::execute_waypoint3D_step(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg){
 
-
-int OffboardController::execute_stopDetection(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action){
-	RCLCPP_INFO(this->get_logger(),"In execute_stopDetection\n");
-	this->camera_publisher_->stopCapture();
-
-	return OffboardController::RETURN_VALUE::action_completed;
-}
-
-int OffboardController::execute_startDetection(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action){
-	RCLCPP_INFO(this->get_logger(),"In execute_startDetection\n");
-	this->camera_publisher_->startCapture(this->position_listener_);
-
-	return OffboardController::RETURN_VALUE::action_completed;
-}
-
-int OffboardController::execute_takeImage(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action){
-	RCLCPP_INFO(this->get_logger(),"In execute_takeImage\n");
-	this->camera_publisher_->captureFrame();
-	return OffboardController::RETURN_VALUE::action_completed;
-}
-
-int OffboardController::execute_waypoint3D_step(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action){
 	RCLCPP_INFO(this->get_logger(),"In execute_waypoint 2 Steps \n");
-	if(!is_flying_){
-		RCLCPP_WARN(this->get_logger(), "Cannot execute, not flying.");
-		return OffboardController::RETURN_VALUE::action_completed;
-	}
 
 	geographic_msgs::msg::GeoPose pose;
 	pose = execute_msg->goal_pose;
-	double current_alt = position_listener_->get_recent_gps_msg()->alt;
+	double current_alt = position_listener_->get_recent_gps_msg()->absolute_altitude_m;
 	double goal_alt = pose.position.altitude; //amsl
 	int result_atom = 0;
 
@@ -870,53 +778,122 @@ int OffboardController::execute_waypoint3D_step(const std::shared_ptr<rclcpp_act
 }
 
 //To execute a 2D motion on the same height.
-int OffboardController::execute_waypoint2D(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action){
+int OffboardController::execute_ascend(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg){
+
+	RCLCPP_INFO(this->get_logger(),"In execute_ascend\n");
+	if(!fc_interface_->publish_offboard_control_mode()){
+		return OffboardController::RETURN_VALUE::action_paused;
+	}
+
+	double goal_height = getHeightAMSL(execute_msg->altitude_level, execute_msg->goal_pose.position.altitude);
+
+	RCLCPP_INFO(this->get_logger(), "Ascending from %f to %f .", position_listener_->get_recent_gps_msg()->absolute_altitude_m, goal_height);
+
+	rclcpp::Rate loop_rate(5);
+	auto result = std::make_shared<ExecuteSequence::Result>();
+	double distance = 0.0;
+
+	while (rclcpp::ok()) {
+		loop_rate.sleep();
+		distance = fc_interface_->move_to_gps(position_listener_->get_recent_gps_msg()->latitude_deg, position_listener_->get_recent_gps_msg()->longitude_deg, goal_height, HEADING::UNCHANGED, execute_msg->speed_m_s); // goal_height in amsl
+
+		if (goal_handle->is_canceling()) {
+			if(is_flying_){
+				fc_interface_->publish_position_control_mode();
+			}
+			return OffboardController::RETURN_VALUE::goal_canceled;
+		}
+
+		if(checkForExternalCommand()){
+			return OffboardController::RETURN_VALUE::action_paused;
+		}
+
+		if (rclcpp::ok() && distance <= 0.5) {
+			loop_rate.sleep();
+			RCLCPP_DEBUG(this->get_logger(), "Acending to current waypoint succeeded");
+			break;
+		}
+	}
+	return OffboardController::RETURN_VALUE::action_completed;
+}
+
+int OffboardController::execute_descend(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg){
+	RCLCPP_INFO(this->get_logger(),"In execute_descend\n");
+	if(!fc_interface_->publish_offboard_control_mode()){
+		return OffboardController::RETURN_VALUE::action_paused;
+	}
+
+	double goal_height = getHeightAMSL(execute_msg->altitude_level, execute_msg->goal_pose.position.altitude);
+
+	RCLCPP_INFO(this->get_logger(), "Descending from %f to %f.", position_listener_->get_recent_gps_msg()->absolute_altitude_m, goal_height);
+
+	rclcpp::Rate loop_rate(5);
+	auto result = std::make_shared<ExecuteSequence::Result>();
+	double distance = 0.0;
+
+	while (rclcpp::ok()) {
+		loop_rate.sleep();
+		distance = fc_interface_->move_to_gps(position_listener_->get_recent_gps_msg()->latitude_deg, position_listener_->get_recent_gps_msg()->longitude_deg, goal_height, HEADING::UNCHANGED, execute_msg->speed_m_s);//alt should be amsl
+
+		if (goal_handle->is_canceling()) {
+			if(is_flying_){
+				fc_interface_->publish_position_control_mode();
+			}
+			return OffboardController::RETURN_VALUE::goal_canceled;
+		}
+
+		if(checkForExternalCommand()){
+			return OffboardController::RETURN_VALUE::action_paused;
+		}
+
+		if (rclcpp::ok() && distance <= 0.5) {
+			loop_rate.sleep();
+			break;
+		}
+	}
+	return OffboardController::RETURN_VALUE::action_completed;
+}
+
+int OffboardController::execute_waypoint2D(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg){
+
 	RCLCPP_INFO(this->get_logger(),"In execute_waypoint 2D \n");
-	if(!is_flying_){
-		RCLCPP_WARN(this->get_logger(), "Cannot execute, not flying.");
-		return OffboardController::RETURN_VALUE::action_completed;
+
+	if(!fc_interface_->publish_offboard_control_mode()){
+		return OffboardController::RETURN_VALUE::action_paused;
 	}
 
 	geographic_msgs::msg::GeoPose pose;
 	pose = execute_msg->goal_pose;
-	pose.position.altitude = position_listener_->get_recent_gps_msg()->alt;
+	pose.position.altitude = position_listener_->get_recent_gps_msg()->absolute_altitude_m;
 
 	RCLCPP_INFO(this->get_logger(), "Starting navigation to %lf, %lf, %lf", pose.position.latitude, pose.position.longitude, pose.position.altitude);
 
-	rclcpp::Rate loop_rate(100);
-
+	rclcpp::Rate loop_rate(5);
 	auto result = std::make_shared<ExecuteSequence::Result>();
-	fc_interface_->publish_offboard_heartbeat();
-	if(!fc_interface_->publish_offboard_control_mode()){
-		if(checkForExternalCommand()){
-			return OffboardController::RETURN_VALUE::action_paused;
-		}
-	}
-
-	double distance = 0;
-	double max_distance = 100.0;
+	double distance = 0.0;
+	double max_distance = 15.0;
 
 	while (rclcpp::ok()) {
 		loop_rate.sleep();
 		geographic_msgs::msg::GeoPose intermediate_goal = pose;
-		double total_distance = gps_converter_->geodeticDistance(position_listener_->get_recent_gps_msg()->lat, position_listener_->get_recent_gps_msg()->lon, intermediate_goal.position.latitude, intermediate_goal.position.longitude);
+		double current_distance = gps_converter_->geodeticDistance(position_listener_->get_recent_gps_msg()->latitude_deg, position_listener_->get_recent_gps_msg()->longitude_deg, intermediate_goal.position.latitude, intermediate_goal.position.longitude);
 
-		if (total_distance > max_distance) {
-			double fraction = max_distance / total_distance;
-			intermediate_goal.position.latitude = position_listener_->get_recent_gps_msg()->lat + fraction * (intermediate_goal.position.latitude -  position_listener_->get_recent_gps_msg()->lat);
-    		intermediate_goal.position.longitude = position_listener_->get_recent_gps_msg()->lon + fraction * (intermediate_goal.position.longitude - position_listener_->get_recent_gps_msg()->lon);
+		if (current_distance > max_distance) {
+			double fraction = max_distance / current_distance;
+			intermediate_goal.position.latitude = position_listener_->get_recent_gps_msg()->latitude_deg + fraction * (intermediate_goal.position.latitude -  position_listener_->get_recent_gps_msg()->latitude_deg);
+    		intermediate_goal.position.longitude = position_listener_->get_recent_gps_msg()->longitude_deg + fraction * (intermediate_goal.position.longitude - position_listener_->get_recent_gps_msg()->longitude_deg);
 		}
 
+		HEADING heading = HEADING::UNCHANGED;
+		if(current_distance > 3.0){
+			heading = HEADING::WAYPOINT;
+		}
 		// NED frame doesnt reset once reaching a waypoint -> altitude is always above mean sea level
-		distance = fc_interface_->move_to_gps(intermediate_goal.position.latitude, intermediate_goal.position.longitude, pose.position.altitude, HEADING::WAYPOINT); //alt is in amsl
+		distance = fc_interface_->move_to_gps(intermediate_goal.position.latitude, intermediate_goal.position.longitude, pose.position.altitude, heading, execute_msg->speed_m_s); //alt is in amsl
 
-		// set result to canceled; if part of an action sequence, check separately in calling funtion if canceled from within here
 		if (goal_handle->is_canceling()) {
 			if(is_flying_){
-				fc_interface_->hover_in_current_position();
-			}
-			if(final_action){
-				goal_handle->canceled(result);
+				fc_interface_->publish_position_control_mode();
 			}
 			return OffboardController::RETURN_VALUE::goal_canceled;
 		}
@@ -925,176 +902,62 @@ int OffboardController::execute_waypoint2D(const std::shared_ptr<rclcpp_action::
 			return OffboardController::RETURN_VALUE::action_paused;
 		}
 
-		// normally distance <= 5
-		if (rclcpp::ok() && distance <= 5) {
+		if (rclcpp::ok() && distance <= 0.5) {
 			loop_rate.sleep();
-			if(final_action){
-				goal_handle->succeed(result);
-				return OffboardController::RETURN_VALUE::goal_succeeded;
-			}
 			break;
 		}
 	}
-	// check in calling function if successfull
+
+	if(execute_msg->goal_pose.orientation.x != 0.0 || execute_msg->goal_pose.orientation.y != 0.0 || execute_msg->goal_pose.orientation.z != 0.0 || execute_msg->goal_pose.orientation.w != 1.0){
+		RCLCPP_INFO(this->get_logger(), "Executing turn to goal orientation");
+		int result_atom = this->execute_turn2angle(goal_handle, execute_msg);
+		if(result_atom != OffboardController::RETURN_VALUE::action_completed){
+			return result_atom;
+		}
+	}
+
 	return OffboardController::RETURN_VALUE::action_completed;
 }
 
-//To execute a 2D motion on the same height.
-int OffboardController::execute_ascend(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action){
-	RCLCPP_INFO(this->get_logger(),"In execute_ascend\n");
-	if(!is_flying_){
-		RCLCPP_WARN(this->get_logger(), "Cannot execute, not flying.");
-		return OffboardController::RETURN_VALUE::action_completed;
-	}
-	double goal_height = getHeightAMSL(execute_msg->altitude_level, execute_msg->goal_pose.position.altitude);
+int OffboardController::execute_waypoint3D(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg){
 
-	RCLCPP_INFO(this->get_logger(), "Ascending from %f to %f .", position_listener_->get_recent_gps_msg()->alt, goal_height);
-
-	rclcpp::Rate loop_rate(100);
-	// goal_handle->publish_feedback(feedback);
-	auto result = std::make_shared<ExecuteSequence::Result>();
-
-	fc_interface_->publish_offboard_heartbeat();
-	if(!fc_interface_->publish_offboard_control_mode()){
-		if(checkForExternalCommand()){
-			return OffboardController::RETURN_VALUE::action_paused;
-		}
-	}
-	double distance = 0;
-
-	while (rclcpp::ok()) {
-		loop_rate.sleep();
-		distance = fc_interface_->move_to_gps(position_listener_->get_recent_gps_msg()->lat, position_listener_->get_recent_gps_msg()->lon, goal_height, HEADING::UNCHANGED); // goal_height in amsl
-
-		// set result to canceled; if part of an action sequence, check separately in calling funtion if canceled from within here
-		if (goal_handle->is_canceling()) {
-			if(is_flying_){
-				fc_interface_->hover_in_current_position();
-			}
-			if(final_action){
-				goal_handle->canceled(result);
-			}
-			return OffboardController::RETURN_VALUE::goal_canceled;
-		}
-
-		if(checkForExternalCommand()){
-			return OffboardController::RETURN_VALUE::action_paused;
-		}
-
-		// normally distance <= 5
-		if (rclcpp::ok() && distance <= 1.5) {
-			loop_rate.sleep();
-			RCLCPP_DEBUG(this->get_logger(), "Acending to current waypoint succeeded");
-			if(final_action){
-				RCLCPP_DEBUG(this->get_logger(), "in final action");
-				goal_handle->succeed(result);
-				return OffboardController::RETURN_VALUE::goal_succeeded;
-			}
-			break;
-		}
-	}
-	return OffboardController::RETURN_VALUE::action_completed;
-}
-
-//To execute a 2D motion on the same height.
-int OffboardController::execute_descend(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action){
-	RCLCPP_INFO(this->get_logger(),"In execute_descend\n");
-	if(!is_flying_){
-		RCLCPP_WARN(this->get_logger(), "Cannot execute, not flying.");
-		return OffboardController::RETURN_VALUE::action_completed;
-	}
-
-	double goal_height = getHeightAMSL(execute_msg->altitude_level, execute_msg->goal_pose.position.altitude);
-
-	RCLCPP_INFO(this->get_logger(), "Descending from %f to %f.", position_listener_->get_recent_gps_msg()->alt, goal_height);
-
-	rclcpp::Rate loop_rate(100);
-	auto result = std::make_shared<ExecuteSequence::Result>();
-
-	fc_interface_->publish_offboard_heartbeat();
-	if(!fc_interface_->publish_offboard_control_mode()){
-		if(checkForExternalCommand()){
-			return OffboardController::RETURN_VALUE::action_paused;
-		}
-	}
-
-	double distance = 0;
-
-	while (rclcpp::ok()) {
-		loop_rate.sleep();
-		distance = fc_interface_->move_to_gps(position_listener_->get_recent_gps_msg()->lat, position_listener_->get_recent_gps_msg()->lon, goal_height, HEADING::UNCHANGED);//alt should be amsl
-
-		if (goal_handle->is_canceling()) {
-			if(is_flying_){
-				fc_interface_->hover_in_current_position();
-			}
-			if(final_action){
-				goal_handle->canceled(result);
-			}
-			return OffboardController::RETURN_VALUE::goal_canceled;
-		}
-
-		if(checkForExternalCommand()){
-			return OffboardController::RETURN_VALUE::action_paused;
-		}
-
-		// normally distance <= 5
-		if (rclcpp::ok() && distance <= 1.5) {
-			loop_rate.sleep();
-			if(final_action){
-				RCLCPP_DEBUG(this->get_logger(), "in final action");
-				goal_handle->succeed(result);
-				return OffboardController::RETURN_VALUE::goal_succeeded;
-			}
-			break;
-		}
-	}
-	return OffboardController::RETURN_VALUE::action_completed;
-}
-
-int OffboardController::execute_waypoint3D(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action){
 	RCLCPP_INFO(this->get_logger(),"In execute_waypoint 3D\n");
-
-	if(!is_flying_){
-		RCLCPP_WARN(this->get_logger(), "Cannot execute, not flying.");
-		return OffboardController::RETURN_VALUE::action_completed;
+	if(!fc_interface_->publish_offboard_control_mode()){
+		return OffboardController::RETURN_VALUE::action_paused;
 	}
 
 	geographic_msgs::msg::GeoPose pose = execute_msg->goal_pose;
 
 	RCLCPP_INFO(this->get_logger(), "Starting navigation to %lf, %lf, %lf", pose.position.latitude, pose.position.longitude, pose.position.altitude);
 	double goal_height = getHeightAMSL(execute_msg->altitude_level, execute_msg->goal_pose.position.altitude);
-
-	rclcpp::Rate loop_rate(100);
 	auto result = std::make_shared<ExecuteSequence::Result>();
 
-	fc_interface_->publish_offboard_heartbeat();
-	if(!fc_interface_->publish_offboard_control_mode()){if(checkForExternalCommand()){return OffboardController::RETURN_VALUE::action_paused;}}
-
-	double distance = 0;
-	double max_distance = 10.0; //metres
+	rclcpp::Rate loop_rate(5);
+	double distance = 0.0;
+	double max_distance = 15.0; //metres
 
 	while (rclcpp::ok()) {
 		loop_rate.sleep();
 		geographic_msgs::msg::GeoPose intermediate_goal = pose;
-		double total_distance = gps_converter_->geodeticDistance(position_listener_->get_recent_gps_msg()->lat, position_listener_->get_recent_gps_msg()->lon, intermediate_goal.position.latitude, intermediate_goal.position.longitude);
+		double current_distance = gps_converter_->geodeticDistance(position_listener_->get_recent_gps_msg()->latitude_deg, position_listener_->get_recent_gps_msg()->longitude_deg, intermediate_goal.position.latitude, intermediate_goal.position.longitude);
 
-		if (total_distance > max_distance) {
-			double fraction = max_distance / total_distance;
-			intermediate_goal.position.latitude = position_listener_->get_recent_gps_msg()->lat + fraction * (intermediate_goal.position.latitude -  position_listener_->get_recent_gps_msg()->lat);
-    		intermediate_goal.position.longitude = position_listener_->get_recent_gps_msg()->lon + fraction * (intermediate_goal.position.longitude - position_listener_->get_recent_gps_msg()->lon);
+		if (current_distance > max_distance) {
+			double fraction = max_distance / current_distance;
+			intermediate_goal.position.latitude = position_listener_->get_recent_gps_msg()->latitude_deg + fraction * (intermediate_goal.position.latitude -  position_listener_->get_recent_gps_msg()->latitude_deg);
+    		intermediate_goal.position.longitude = position_listener_->get_recent_gps_msg()->longitude_deg + fraction * (intermediate_goal.position.longitude - position_listener_->get_recent_gps_msg()->longitude_deg);
+		}
+
+		HEADING heading = HEADING::UNCHANGED;
+		if(current_distance > 3.0){
+			heading = HEADING::WAYPOINT;
 		}
 
 		// NED frame doesnt reset once reaching a waypoint -> altitude is always above mean sea level
-		distance = fc_interface_->move_to_gps(intermediate_goal.position.latitude, intermediate_goal.position.longitude, goal_height, HEADING::WAYPOINT); //alt should be above mean sea level
+		distance = fc_interface_->move_to_gps(intermediate_goal.position.latitude, intermediate_goal.position.longitude, goal_height, heading, execute_msg->speed_m_s); //alt should be above mean sea level
 
-		// set result to canceled; if part of an action sequence, check separately in calling funtion if canceled from within here
 		if (goal_handle->is_canceling()) {
 			if(is_flying_){
-				fc_interface_->hover_in_current_position();
-			}
-			if(final_action){
-				goal_handle->canceled(result);
+				fc_interface_->publish_position_control_mode();
 			}
 			RCLCPP_DEBUG(this->get_logger(), "Navigation to current waypoint canceled");
 			return OffboardController::RETURN_VALUE::goal_canceled;
@@ -1104,50 +967,89 @@ int OffboardController::execute_waypoint3D(const std::shared_ptr<rclcpp_action::
 			return OffboardController::RETURN_VALUE::action_paused;
 		}
 
-		// normally distance <= 5
-		if (rclcpp::ok() && distance <= 5) {
+		if (rclcpp::ok() && distance <= 0.5) {
 			loop_rate.sleep();
 			RCLCPP_DEBUG(this->get_logger(), "Navigation to current waypoint succeeded");
-			if(final_action){
-				RCLCPP_DEBUG(this->get_logger(), "in final action");
-				goal_handle->succeed(result);
-				return OffboardController::RETURN_VALUE::goal_succeeded;
-			}
 			break;
 		}
 
 	}
+
+	if(execute_msg->goal_pose.orientation.x != 0.0 || execute_msg->goal_pose.orientation.y != 0.0 || execute_msg->goal_pose.orientation.z != 0.0 || execute_msg->goal_pose.orientation.w != 1.0){
+		RCLCPP_INFO(this->get_logger(), "Executing turn to goal orientation");
+		int result_atom = this->execute_turn2angle(goal_handle, execute_msg);
+		if(result_atom != OffboardController::RETURN_VALUE::action_completed){
+			return result_atom;
+		}
+	}
 	return OffboardController::RETURN_VALUE::action_completed;
 }
 
-int OffboardController::execute_takeoff(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg,  bool final_action){
-	RCLCPP_INFO(this->get_logger(),"In execute_takeoff \n");
-
-	rclcpp::Rate loop_rate(500);
-	rclcpp::Rate loop_rate_arming(1);
-	double takeoff_height = 2.0;
-
-	takeoff_height = getHeightAMSL(execute_msg->altitude_level, execute_msg->goal_pose.position.altitude);
-
-	if(is_flying_){
-		return OffboardController::RETURN_VALUE::action_completed;
-	}
+int OffboardController::execute_hover(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg){
+	RCLCPP_INFO(this->get_logger(),"In execute_hover \n");
 
 	auto result = std::make_shared<ExecuteSequence::Result>();
 
-	fc_interface_->publish_offboard_heartbeat();
-	if(!is_flying_){
+	rclcpp::Rate loop_rate(5);
+	auto start_time = this->get_clock()->now();
+	auto current_time = this->get_clock()->now();
+	int current_times = 0;
+
+	fc_interface_->publish_position_control_mode();
+
+	while (rclcpp::ok()){
+		loop_rate.sleep();
+		current_times++;
+
+		if(is_flying_){
+			fc_interface_->publish_position_control_mode();
+		}
+
+		if (goal_handle->is_canceling()) {
+			if(is_flying_){
+				fc_interface_->publish_position_control_mode();
+			}
+			RCLCPP_INFO(this->get_logger(), "Hovering at current waypoint canceled");
+			return OffboardController::RETURN_VALUE::goal_canceled;
+		}
+
+		if(checkForExternalCommand()){
+			return OffboardController::RETURN_VALUE::action_paused;
+		}
+
+		current_time = this->get_clock()->now();
+		if (rclcpp::ok()  && ((current_time - start_time).nanoseconds()/1000000.0 > (execute_msg->hover_duration))) {
+			loop_rate.sleep();
+			RCLCPP_INFO(this->get_logger(), "Hovering in position succeeded.");
+			break;
+		}
+	}
+	return OffboardController::RETURN_VALUE::action_completed;
+}
+
+int OffboardController::execute_takeoff(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg){
+	RCLCPP_INFO(this->get_logger(),"In execute_takeoff \n");
+
+	rclcpp::Rate loop_rate(2);
+	rclcpp::Rate loop_rate_arming(1);
+	double takeoff_height = getHeightAMSL(execute_msg->altitude_level, execute_msg->goal_pose.position.altitude);
+	auto result = std::make_shared<ExecuteSequence::Result>();
+
+	if(is_flying_){
+
+		return OffboardController::RETURN_VALUE::action_completed;
+
+	}else{
+
 		int retry_count = 0;
 		int max_retry_count = int(50/1);
-		while((vehicle_status_listener_->get_VehicleStatus_msg()->arming_state != 2) && retry_count < max_retry_count){
-			fc_interface_->publish_offboard_control_mode();
+
+		while(!vehicle_status_listener_->get_arming_state() && retry_count < max_retry_count){
+
 			fc_interface_->arm();
 
 			if (goal_handle->is_canceling()) {
 				fc_interface_->disarm();
-				if(final_action){
-					goal_handle->canceled(result);
-				}
 				RCLCPP_INFO(this->get_logger(), "Takeoff canceled");
 				return OffboardController::RETURN_VALUE::goal_canceled;
 			}
@@ -1160,32 +1062,24 @@ int OffboardController::execute_takeoff(const std::shared_ptr<rclcpp_action::Ser
 			retry_count++;
 		}
 
-		//return if not worked
 		if (retry_count >= max_retry_count){
 			RCLCPP_INFO(this->get_logger(), "Takeoff aborted: [could not arm]");
 			goal_handle->abort(result);
 			return OffboardController::RETURN_VALUE::action_critical_failure;
 		}
 
-		fc_interface_->publish_offboard_heartbeat();
 		RCLCPP_INFO(this->get_logger(),"Taking off to altitude: %f",takeoff_height);
-		// plus 15 to be able to break the loop beneath
-		is_flying_ = fc_interface_->takeoff(takeoff_height+15);
-		if(is_flying_){
-			this->position_listener_->set_recent_platform_state("AIRBORNE");
-		}
+
+		fc_interface_->takeoff(takeoff_height+15);
 	}
 
 	while (rclcpp::ok()) {
+
 		loop_rate.sleep();
 
-		//cancel
 		if (goal_handle->is_canceling()) {
 			if(is_flying_){
-				fc_interface_->hover_in_current_position();
-			}
-			if(final_action){
-				goal_handle->canceled(result);
+				fc_interface_->publish_position_control_mode();
 			}
 			RCLCPP_INFO(this->get_logger(), "TakeOff canceled");
 			return OffboardController::RETURN_VALUE::goal_canceled;
@@ -1195,47 +1089,32 @@ int OffboardController::execute_takeoff(const std::shared_ptr<rclcpp_action::Ser
 			return OffboardController::RETURN_VALUE::action_paused;
 		}
 
-		if (rclcpp::ok() && position_listener_->get_recent_gps_msg()->alt > takeoff_height) {
+		if (rclcpp::ok() && position_listener_->get_recent_gps_msg()->absolute_altitude_m > takeoff_height) {
 			loop_rate.sleep();
-			if(final_action){
-				goal_handle->succeed(result);
-				return OffboardController::RETURN_VALUE::goal_succeeded;
-			}
+			is_flying_ = true;
+			this->position_listener_->set_recent_platform_state("AIRBORNE");
 			RCLCPP_INFO(this->get_logger(), "Takeoff succeeded");
 			break;
 		}
 	}
-	fc_interface_->publish_offboard_control_mode();//to reset from takeoff mode
+	fc_interface_->publish_position_control_mode();
 	return OffboardController::RETURN_VALUE::action_completed;
 }
 
 
-int OffboardController::execute_landing(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action){
+int OffboardController::execute_landing(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg){
+
 	RCLCPP_INFO(this->get_logger(),"In execute_landing \n");
-	if(!is_flying_){
-		RCLCPP_WARN(this->get_logger(), "Cannot execute, not flying.");
-		return OffboardController::RETURN_VALUE::action_completed;
-	}
-
-	rclcpp::Rate loop_rate(100);
+	rclcpp::Rate loop_rate(5);
 	double land_height = -3.0;
-
-	//Called via sequence
-	land_height = position_listener_->get_recent_home_msg()->alt - 3;
-
+	land_height = position_listener_->get_recent_home_msg()->absolute_altitude_m - 0.5;
 
 	auto result = std::make_shared<ExecuteSequence::Result>();
 
 	if(!is_flying_){
 		return OffboardController::RETURN_VALUE::action_completed;
-	}
-
-	fc_interface_->publish_offboard_heartbeat();
-	if(is_flying_){
-		is_flying_ = fc_interface_->land(position_listener_->get_recent_gps_msg()->lat, position_listener_->get_recent_gps_msg()->lon, land_height);
-		if(!is_flying_){
-			this->position_listener_->set_recent_platform_state("LANDED");
-		}
+	}else{
+		fc_interface_->land(position_listener_->get_recent_gps_msg()->latitude_deg, position_listener_->get_recent_gps_msg()->longitude_deg, land_height);
 	}
 
 	while (rclcpp::ok()) {
@@ -1243,10 +1122,7 @@ int OffboardController::execute_landing(const std::shared_ptr<rclcpp_action::Ser
 
 		if (goal_handle->is_canceling()) {
 			if(is_flying_){
-				fc_interface_->hover_in_current_position();
-			}
-			if(final_action){
-				goal_handle->canceled(result);
+				fc_interface_->publish_position_control_mode();
 			}
 			RCLCPP_INFO(this->get_logger(), "Landing canceled");
 			return OffboardController::RETURN_VALUE::goal_canceled;
@@ -1256,12 +1132,10 @@ int OffboardController::execute_landing(const std::shared_ptr<rclcpp_action::Ser
 			return OffboardController::RETURN_VALUE::action_paused;
 		}
 
-		if (rclcpp::ok() && position_listener_->get_recent_gps_msg()->alt < (position_listener_->get_recent_home_msg()->alt+0.003)) {
+		if (rclcpp::ok() && position_listener_->get_recent_gps_msg()->absolute_altitude_m < (position_listener_->get_recent_home_msg()->absolute_altitude_m + 0.1)) {
+			is_flying_ = false;
+			this->position_listener_->set_recent_platform_state("LANDED");
 			loop_rate.sleep();
-			if(final_action){
-				goal_handle->succeed(result);
-				return OffboardController::RETURN_VALUE::goal_succeeded;
-			}
 			RCLCPP_INFO(this->get_logger(), "Landing succeeded");
 			break;
 		}
@@ -1269,118 +1143,26 @@ int OffboardController::execute_landing(const std::shared_ptr<rclcpp_action::Ser
 	return OffboardController::RETURN_VALUE::action_completed;
 }
 
-
-//Calls the hover in position function for a given duration
-
-int OffboardController::execute_hover(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action){
-	RCLCPP_INFO(this->get_logger(),"In execute_hover \n");
-	if(!is_flying_){
-		RCLCPP_WARN(this->get_logger(), "Cannot execute, not flying.");
-		return OffboardController::RETURN_VALUE::action_completed;
-	}
-	rclcpp::Rate loop_rate(100);
-
-	auto result = std::make_shared<ExecuteSequence::Result>();
-
-	// 	execute_waypoint to move to hover position maybe
-	auto start_time = this->get_clock()->now();
-	auto current_time = this->get_clock()->now();
-	int current_times = 0;
-
-	fc_interface_->publish_offboard_control_mode();
-	while (rclcpp::ok()){
-		loop_rate.sleep();
-		current_times++;
-		RCLCPP_DEBUG(this->get_logger(), "publishing setpoint number %d ", current_times);
-		if(is_flying_){
-			fc_interface_->hover_in_current_position(); //roll, pitch, yaw
-		}
-
-		// set result to canceled; if part of an action sequence, check separately in calling funtion if canceled from within here
-		if (goal_handle->is_canceling()) {
-			if(is_flying_){
-				fc_interface_->hover_in_current_position();
-			}// if hover canceled hover in position :)
-			if(final_action){
-				goal_handle->canceled(result);
-			}
-			RCLCPP_INFO(this->get_logger(), "Hovering at current waypoint canceled");
-			return OffboardController::RETURN_VALUE::goal_canceled;
-		}
-
-		if(checkForExternalCommand()){
-			return OffboardController::RETURN_VALUE::action_paused;
-		}
-
-		// hover till duration reached -> checked every loop rate -> once every second -> for more precise durations reduce loop rate
-		current_time = this->get_clock()->now();
-		//std::cout<<"duration: "<< (current_time - start_time).nanoseconds()/1000000.0 << ",  hover duration: "<<(execute_msg->hover_duration)<<std::endl;
-		if (rclcpp::ok()  && ((current_time - start_time).nanoseconds()/1000000.0 > (execute_msg->hover_duration))) {
-			loop_rate.sleep();
-			RCLCPP_INFO(this->get_logger(), "Hovering in position succeeded.");
-			if(final_action){
-				RCLCPP_INFO(this->get_logger(), "in final action");
-				goal_handle->succeed(result);
-				return OffboardController::RETURN_VALUE::goal_succeeded;
-			}
-			break;
-		}
-	}
+int OffboardController::execute_stopCapture(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg){
+	RCLCPP_INFO(this->get_logger(),"In execute_stopCapture\n");
+	this->camera_publisher_->stopCapture();
 	return OffboardController::RETURN_VALUE::action_completed;
 }
 
-int OffboardController::execute_scanArea(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action){
-	RCLCPP_INFO(this->get_logger(), "In execute_scanArea");
-	if(!is_flying_){
-		RCLCPP_WARN(this->get_logger(), "Cannot execute, not flying.");
-		return OffboardController::RETURN_VALUE::action_completed;
-	}
-
-	auto result = std::make_shared<ExecuteSequence::Result>();
-
-	double scan_height = execute_msg->height - position_listener_->get_recent_home_msg()->alt;
-	execute_msg->altitude_level.value = AltitudeLevel::AMSL;
-
-	//the vertices which span the polygon scan area
-	std::vector<geometry_msgs::msg::Pose2D> polygon_vertices = execute_msg->scan_polygon_vertices;
-
-	//the sensor FOV in degree
-	double sensor_fov_hor = 30;// 30 degree means +/- 15
-	double sensor_fov_vert = 30;
-
-	//compute footprint
-	double sensor_height = (tan(((sensor_fov_hor/2.0)*M_PI)/180.0) * scan_height) * 2.0;//in metres
-	double sensor_width = (tan(((sensor_fov_vert/2.0)*M_PI)/180.0) * scan_height) * 2.0;//in metres
-
-	//abort if there are not enough vertices given
-	if(polygon_vertices.size() < 3){
-		RCLCPP_ERROR(this->get_logger(), "Error: Not enough vertices specified for scanning.");
-		return OffboardController::RETURN_VALUE::action_failure;
-	}
-	std::vector<Vector3D> scanWaypoints = this->get_scanWaypoints(execute_msg->height, sensor_width, polygon_vertices);
-
-	//generate atom msgs from waypoint vector
-	std::vector<ExecuteAtom> executeAtoms_wp = generateFlyAtomFromVector(scanWaypoints);
-
-	//Execute each waypoint
-	for(auto &wp: executeAtoms_wp){
-		int result_atom = execute_waypoint3D(goal_handle, &wp);
-		if(result_atom == OffboardController::RETURN_VALUE::action_completed){
-			continue;
-		}else{
-			return result_atom;
-		}
-
-	}
-
-	RCLCPP_INFO(this->get_logger(), "Successfully scanned the specified area.");
-
+int OffboardController::execute_startCapture(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg){
+	RCLCPP_INFO(this->get_logger(),"In execute_startCapture\n");
+	this->camera_publisher_->startCapture(this->position_listener_);
 	return OffboardController::RETURN_VALUE::action_completed;
 }
 
+int OffboardController::execute_takeImage(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg){
+	RCLCPP_INFO(this->get_logger(),"In execute_takeImage\n");
+	this->camera_publisher_->captureFrame();
+	return OffboardController::RETURN_VALUE::action_completed;
+}
 
 //Will turn in a 360 degree and trigger the camera to publish images
-int OffboardController::execute_PanoramaPicture(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg, bool final_action ){
+int OffboardController::execute_PanoramaPicture(const std::shared_ptr<rclcpp_action::ServerGoalHandle<ExecuteSequence>> goal_handle, ExecuteAtom* execute_msg ){
 	return OffboardController::RETURN_VALUE::action_completed;
 }
 
@@ -1411,24 +1193,24 @@ void OffboardController::publish_position_feedback(const std::shared_ptr<rclcpp_
 
 	auto feedback = std::make_shared<ExecuteSequence::Feedback>();
 	feedback->current_pose.header.stamp = this->get_clock()->now();
-	feedback->current_pose.pose.position.x = position_listener_->get_recent_gps_msg()->lat;
-	feedback->current_pose.pose.position.y = position_listener_->get_recent_gps_msg()->lon;
-	feedback->current_pose.pose.position.z = position_listener_->get_recent_gps_msg()->alt;
+	feedback->current_pose.pose.position.x = position_listener_->get_recent_gps_msg()->latitude_deg;
+	feedback->current_pose.pose.position.y = position_listener_->get_recent_gps_msg()->longitude_deg;
+	feedback->current_pose.pose.position.z = position_listener_->get_recent_gps_msg()->absolute_altitude_m;
 	feedback->finished_actions_in_sequence = this->current_action_index;
 	goal_handle->publish_feedback(feedback);
+
 }
 
 void OffboardController::get_origin(const std::shared_ptr<auspex_msgs::srv::GetOrigin::Request> request, std::shared_ptr<auspex_msgs::srv::GetOrigin::Response> response){
-		response->origin.latitude = position_listener_->get_recent_home_msg()->lat;
-		response->origin.longitude = position_listener_->get_recent_home_msg()->lon;
-		response->origin.altitude = position_listener_->get_recent_home_msg()->alt;
+		response->origin.latitude = position_listener_->get_recent_home_msg()->latitude_deg;
+		response->origin.longitude = position_listener_->get_recent_home_msg()->longitude_deg;
+		response->origin.altitude = position_listener_->get_recent_home_msg()->absolute_altitude_m;
 		response->success = true;
 }
 
-
 /**
-	* @brief callback for set_origin service --> actually just setting home. NED origin should stay the same
-	*/
+* @brief callback for set_origin service --> actually just setting home. NED origin should stay the same
+*/
 void OffboardController::set_origin(const std::shared_ptr<auspex_msgs::srv::SetOrigin::Request> request, std::shared_ptr<auspex_msgs::srv::SetOrigin::Response> response){
 	double lat = request->origin.latitude;
 	double lon = request->origin.longitude;
@@ -1446,9 +1228,9 @@ void OffboardController::set_origin(const std::shared_ptr<auspex_msgs::srv::SetO
 	//check if home is new one
 	response->success = false;
 	double eps = 0.001;
-	if(std::fabs(position_listener_->get_recent_home_msg()->lat -lat)< eps &&
-		std::fabs(position_listener_->get_recent_home_msg()->lon-lon)< eps&&
-		std::fabs(position_listener_->get_recent_home_msg()->alt-alt)< eps){
+	if(std::fabs(position_listener_->get_recent_home_msg()->latitude_deg - lat)< eps &&
+		std::fabs(position_listener_->get_recent_home_msg()->longitude_deg - lon)< eps&&
+		std::fabs(position_listener_->get_recent_home_msg()->absolute_altitude_m - alt)< eps){
 
 		response->success = true;
 	}
@@ -1475,31 +1257,31 @@ void OffboardController::handle_add_action(const std::shared_ptr<auspex_msgs::sr
 *@brief Handles user commands NOT IMPLEMENTED
 */
 void OffboardController::handle_user_command(const UserCommand::SharedPtr msg){
-		if(msg->user_command == UserCommand::USER_CANCEL){
-			RCLCPP_ERROR(this->get_logger(), "Not Implemented!");
-		}else if(msg->user_command == UserCommand::USER_PAUSE){
-			RCLCPP_INFO(this->get_logger(), "User Requested Pause.");
-			vehicle_status_listener_->set_Paused_from_Extern_msg(true);
-			if(is_flying_){
-				this->position_listener_->set_recent_platform_state("AIRBORNE - PAUSED");
-			}else{
-				this->position_listener_->set_recent_platform_state("PAUSED");
-			}
-		}else if(msg->user_command == UserCommand::USER_RESUME){
-			vehicle_status_listener_->set_Paused_from_Extern_msg(false);
-			if(is_flying_){
-				this->position_listener_->set_recent_platform_state("AIRBORNE");
-			}else{
-				this->position_listener_->set_recent_platform_state("LANDED");
-			}
-			RCLCPP_INFO(this->get_logger(), "User Requested Resume.");
+	if(msg->user_command == UserCommand::USER_CANCEL){
+		RCLCPP_ERROR(this->get_logger(), "Not Implemented!");
+	}else if(msg->user_command == UserCommand::USER_PAUSE){
+		RCLCPP_INFO(this->get_logger(), "User Requested Pause.");
+		vehicle_status_listener_->set_paused_from_extern(true);
+		if(is_flying_){
+			this->position_listener_->set_recent_platform_state("AIRBORNE - PAUSED");
 		}else{
-			RCLCPP_INFO(this->get_logger(), "Got Command which is not implemented");
+			this->position_listener_->set_recent_platform_state("PAUSED");
 		}
+	}else if(msg->user_command == UserCommand::USER_RESUME){
+		vehicle_status_listener_->set_paused_from_extern(false);
+		if(is_flying_){
+			this->position_listener_->set_recent_platform_state("AIRBORNE");
+		}else{
+			this->position_listener_->set_recent_platform_state("LANDED");
+		}
+		RCLCPP_INFO(this->get_logger(), "User Requested Resume.");
+	}else{
+		RCLCPP_INFO(this->get_logger(), "Got Command which is not implemented");
+	}
 }
 
 bool OffboardController::checkForExternalCommand(){
-	if(vehicle_status_listener_->get_Paused_from_Extern_msg()){
+	if(vehicle_status_listener_->get_paused_from_extern()){
 		return true;
 	}else{
 		return false;
@@ -1508,9 +1290,9 @@ bool OffboardController::checkForExternalCommand(){
 
 double OffboardController::get_groundHeight_amsl(){
 	auto request = std::make_shared<GetAltitude::Request>();
-	request->gps_position.latitude = position_listener_->get_recent_gps_msg()->lat;
-	request->gps_position.longitude = position_listener_->get_recent_gps_msg()->lon;
-	request->gps_position.altitude = position_listener_->get_recent_gps_msg()->alt;
+	request->gps_position.latitude = position_listener_->get_recent_gps_msg()->latitude_deg;
+	request->gps_position.longitude = position_listener_->get_recent_gps_msg()->longitude_deg;
+	request->gps_position.altitude = position_listener_->get_recent_gps_msg()->absolute_altitude_m;
 	request->resolution = 1;
 
 	double altitude = 0.0;
@@ -1530,7 +1312,23 @@ double OffboardController::get_groundHeight_amsl(){
 	return altitude;
 }
 
-
+double OffboardController::getHeightAMSL(AltitudeLevel level, double value){
+	double height_amsl = 0.0;
+	if(level.value == AltitudeLevel::AMSL){
+		height_amsl = value;
+	}else if (level.value == AltitudeLevel::AGL){
+		// AGL
+		if(is_height_data_available){
+			height_amsl = (this->get_groundHeight_amsl() + value);
+		}else{
+			RCLCPP_INFO(this->get_logger(), "Height data not available... flying above ground not recommended.");
+			height_amsl = value;
+		}
+	}else{
+		height_amsl = position_listener_->get_recent_gps_msg()->absolute_altitude_m + value;
+	}
+	return height_amsl;
+}
 
 std::vector<Vector3D> OffboardController::get_scanWaypoints(double scan_height, double sensor_width, std::vector<geometry_msgs::msg::Pose2D> polygon_vertices){
     // Initialize bounding box values
@@ -1560,7 +1358,7 @@ std::vector<Vector3D> OffboardController::get_scanWaypoints(double scan_height, 
 
     for (size_t i = 0; i < rectangle_poses.size(); ++i) {
         double dist = gps_converter_->geodeticDistance(
-            current_pos->lat, current_pos->lon,
+            current_pos->latitude_deg, current_pos->longitude_deg,
             rectangle_poses[i].getX(), rectangle_poses[i].getY()
         );
         if (dist < min_distance) {
@@ -1617,24 +1415,4 @@ std::vector<Vector3D> OffboardController::get_scanWaypoints(double scan_height, 
     }
 
     return scanWaypoints;
-}
-
-
-
-double OffboardController::getHeightAMSL(AltitudeLevel level, double value){
-	double height_amsl = 0.0;
-	if(level.value == AltitudeLevel::AMSL){
-		height_amsl = value;
-	}else if (level.value == AltitudeLevel::AGL){
-		// AGL
-		if(is_height_data_available){
-			height_amsl = (this->get_groundHeight_amsl() + value);
-		}else{
-			RCLCPP_INFO(this->get_logger(), "Height data not available... flying above ground not recommended.");
-			height_amsl = value;
-		}
-	}else{
-		height_amsl = position_listener_->get_recent_gps_msg()->alt + value;
-	}
-	return height_amsl;
 }

@@ -4,6 +4,7 @@
 #include <string>
 #include <memory>
 #include <chrono>
+#include <mutex>
 #include "rclcpp/rclcpp.hpp"
 #include "msg_context_cpp/message_loader.hpp"
 #include "auspex_fci/position_listener_base.hpp"
@@ -37,6 +38,7 @@ protected:
   rclcpp::Publisher<FrameData>::SharedPtr image_publisher_;
   std::shared_ptr<VehicleGlobalPositionListener_Base> gps_listener_;
   rclcpp::TimerBase::SharedPtr timer_;
+  mutable std::mutex capture_mutex_;
 };
 
 #endif // CAM_PUBLISHER_BASE_HPP

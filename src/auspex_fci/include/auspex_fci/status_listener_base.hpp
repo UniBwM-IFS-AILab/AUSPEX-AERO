@@ -2,9 +2,10 @@
 #define VEHICLE_STATUS_LISTENER_HPP
 
 #include <string>
-#include <px4_msgs/msg/battery_status.hpp>
-#include <px4_msgs/msg/vehicle_status.hpp>
-#include <px4_msgs/msg/vehicle_command.hpp>
+#include <mavsdk/plugins/action/action.h>
+#include <mavsdk/plugins/param/param.h>
+#include <mavsdk/plugins/telemetry/telemetry.h>
+
 using std::placeholders::_1;
 
 class VehicleStatusListener_Base : public rclcpp::Node{
@@ -18,22 +19,22 @@ public:
     /**
      * @brief gets the recent gps position.
      */
-    virtual px4_msgs::msg::BatteryStatus::SharedPtr get_battery_msg() = 0;
+    virtual std::shared_ptr<mavsdk::Telemetry::Battery> get_battery_msg() = 0;
 
     /**
      * @brief gets the recent gps position.
      */
-	virtual px4_msgs::msg::VehicleStatus::SharedPtr get_VehicleStatus_msg() = 0;
+	virtual bool get_arming_state() = 0;
 
     /**
-     * @brief gets the recent gps position.
+     * @brief gets whether the vehicle is paused from an external command.
      */
-	virtual bool get_Paused_from_Extern_msg() = 0;
+	virtual bool get_paused_from_extern() = 0;
 
     /**
-     * @brief gets the recent gps position.
+     * @brief sets whether the vehicle is paused from an external command.
      */
-	virtual void set_Paused_from_Extern_msg(bool new_paused) = 0;
+	virtual void set_paused_from_extern(bool new_paused) = 0;
 };
 
 #endif

@@ -5,19 +5,19 @@
 
 class VehicleGlobalPositionListener_ANAFI : public VehicleGlobalPositionListener_Base{
 public:
-    VehicleGlobalPositionListener_ANAFI(std::string name_prefix = "") : VehicleGlobalPositionListener_Base(name_prefix + "_" + "vehicle_global_position_listener_anafi") {
-        px4_msgs::msg::VehicleGlobalPosition empty_gps_msg{};
-		recent_gps_msg = std::make_shared<px4_msgs::msg::VehicleGlobalPosition>(std::move(empty_gps_msg));
+    VehicleGlobalPositionListener_ANAFI(std::string name_prefix) : VehicleGlobalPositionListener_Base(name_prefix + "_" + "vehicle_global_position_listener_anafi") {
+        mavsdk::Telemetry::Position empty_gps_msg{};
+		recent_gps_msg = std::make_shared<mavsdk::Telemetry::Position>(std::move(empty_gps_msg));
 		// initialize with negative values to check if initial message was received
-		recent_gps_msg->lat = -1;
-		recent_gps_msg->lon = -1;
-		recent_gps_msg->alt = -1;
+		recent_gps_msg->latitude_deg = -1;
+		recent_gps_msg->longitude_deg = -1;
+		recent_gps_msg->absolute_altitude_m = -1;
 
-		px4_msgs::msg::VehicleOdometry empty_ned_msg{};
-		recent_ned_msg = std::make_shared<px4_msgs::msg::VehicleOdometry>(std::move(empty_ned_msg));
+		mavsdk::Telemetry::Odometry empty_ned_msg{};
+		recent_ned_msg = std::make_shared<mavsdk::Telemetry::Odometry>(std::move(empty_ned_msg));
 
-		px4_msgs::msg::HomePosition empty_home_msg{};
-		recent_home_msg = std::make_shared<px4_msgs::msg::HomePosition>(std::move(empty_home_msg));
+		mavsdk::Telemetry::Position empty_home_msg{};
+		recent_home_msg = std::make_shared<mavsdk::Telemetry::Position>(std::move(empty_home_msg));
 
 		rmw_qos_profile_t qos_profile = rmw_qos_profile_sensor_data;
 		auto qos = rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 5), qos_profile);
@@ -27,63 +27,55 @@ public:
     /**
      * @brief checks if one gps update is already made. To init FC one gps position is needed.
      */
-    std::future<bool> get_next_gps_future() override {
-        if(gps_promise_set){
-			gps_promise_set = false;
-			gps_promise = std::promise<bool>();
-		}
-		return gps_promise.get_future();
+    bool get_first_gps_future() override {
+        return gps_init_set.load();
+    }
+
+    void update_home_position() override {
+
     }
 
     /**
      * @brief gets the recent gps position.
      */
-	px4_msgs::msg::VehicleGlobalPosition::SharedPtr get_recent_gps_msg() override {
+	std::shared_ptr<mavsdk::Telemetry::Position> get_recent_gps_msg() override {
         return recent_gps_msg;
     }
 
     /**
      * @brief Gets the recent ned position.
      */
-	px4_msgs::msg::VehicleOdometry::SharedPtr get_recent_ned_msg() override {
+	std::shared_ptr<mavsdk::Telemetry::Odometry> get_recent_ned_msg() override {
         return recent_ned_msg;
     }
 
     /**
      * @brief Gets the recent home position.
      */
-	px4_msgs::msg::HomePosition::SharedPtr get_recent_home_msg() override {
+	std::shared_ptr<mavsdk::Telemetry::Position> get_recent_home_msg() override {
         return recent_home_msg;
     }
-
-    void set_recent_home_msg() override {
-        recent_home_msg->lat = recent_gps_msg->lat;
-        recent_home_msg->lon = recent_gps_msg->lon;
-        recent_home_msg->alt = recent_gps_msg->alt;
-    }
-
 
     /**
      * @brief Gets the recent platform state.
      */
-     std::string get_recent_platform_state() override {
+    std::string get_recent_platform_state() override {
         return "INACTIVE";
-     }
+    }
 
     /**
      * @brief Sets the recent platform state.
      */
-     void set_recent_platform_state(std::string new_platform_state) override {
+    void set_recent_platform_state(std::string new_platform_state) override {
 
-     };
+    };
 
 private:
-	px4_msgs::msg::VehicleGlobalPosition::SharedPtr recent_gps_msg;
-	px4_msgs::msg::VehicleOdometry::SharedPtr recent_ned_msg;
-	px4_msgs::msg::HomePosition::SharedPtr recent_home_msg;
+	std::shared_ptr<mavsdk::Telemetry::Position> recent_gps_msg;
+	std::shared_ptr<mavsdk::Telemetry::Odometry> recent_ned_msg;
+	std::shared_ptr<mavsdk::Telemetry::Position> recent_home_msg;
 
-	std::promise<bool> gps_promise;
-	bool gps_promise_set = false;
+    std::atomic<bool> gps_init_set{false};
 };
 
 

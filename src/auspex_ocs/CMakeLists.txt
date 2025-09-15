@@ -14,9 +14,9 @@ find_package(OpenCV REQUIRED COMPONENTS core imgproc highgui xphoto)
 find_package(image_transport REQUIRED)
 find_package(auspex_fci REQUIRED)
 find_package(auspex_msgs REQUIRED)
-find_package(px4_msgs REQUIRED)
 find_package(geographic_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(MAVSDK REQUIRED)
 find_package(msg_context_cpp REQUIRED)
 
 if(DEFINED ENV{MSG_CONTEXT} AND "$ENV{MSG_CONTEXT}" STREQUAL "MENTHON")
@@ -60,6 +60,7 @@ set(SRC
   $<$<STREQUAL:${FIRST_CAM},RPI5>:src/cam_publisher_rpi5.cpp>
   $<$<STREQUAL:${FIRST_CAM},RPI>:src/cam_publisher_rpi.cpp>
   $<$<STREQUAL:${FIRST_CAM},ZT30>:src/cam_publisher_mk_smart.cpp>
+  $<$<STREQUAL:${FIRST_CAM},NONE>:src/cam_publisher_empty.cpp>
 )
 
 add_library(auspex_ocs SHARED ${SRC})
@@ -73,7 +74,6 @@ target_include_directories(auspex_ocs
     ${msg_context_cpp_INCLUDE_DIRS}
     ${auspex_fci_INCLUDE_DIRS}
     ${geographic_msgs_INCLUDE_DIRS}
-    ${px4_msgs_INCLUDE_DIRS}
 
     $<$<STREQUAL:${FIRST_CAM},SIM>:${RPC_LIB_INCLUDES}>
     $<$<STREQUAL:${FIRST_CAM},SIM>:${AIRSIM_ROOT}/AirLib/include>
@@ -94,6 +94,7 @@ target_include_directories(auspex_ocs
     image_transport::image_transport
     Eigen3::Eigen
     ${OpenCV_LIBS}
+    MAVSDK::mavsdk
    PRIVATE
      $<$<STREQUAL:${FIRST_CAM},SIM>:AirLib>
      $<$<STREQUAL:${FIRST_CAM},SIM>:MavLinkCom>
@@ -133,7 +134,6 @@ ament_export_dependencies(
   msg_context_cpp
   auspex_fci
   auspex_msgs
-  px4_msgs
   geographic_msgs
   cv_bridge
   OpenCV

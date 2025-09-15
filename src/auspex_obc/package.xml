@@ -17,7 +17,6 @@
   <depend>builtin_interfaces</depend>
   <depend>rclcpp</depend>
 
-  <depend>px4_msgs</depend>
   <depend>auspex_ocs</depend>
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>

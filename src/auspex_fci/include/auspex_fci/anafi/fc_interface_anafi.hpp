@@ -9,11 +9,11 @@
 class FC_Interface_ANAFI : public FC_Interface_Base {
 public:
     // Use code from cpp file to fill these parts...
-    FC_Interface_ANAFI(std::shared_ptr<VehicleStatusListener_Base> vehicle_status_listener, std::shared_ptr<VehicleGlobalPositionListener_Base> position_listener, std::string name_prefix = ""): FC_Interface_Base(name_prefix + "_" + "fc_interface_anafi"){
-        name_prefix_ = name_prefix;
-
+    FC_Interface_ANAFI(std::shared_ptr<VehicleStatusListener_Base> vehicle_status_listener, std::shared_ptr<VehicleGlobalPositionListener_Base> position_listener, std::string name_prefix): FC_Interface_Base(name_prefix + "_" + "fc_interface_anafi"){
+        this->name_prefix_ = name_prefix;
         vehicle_status_listener_ = vehicle_status_listener;
         position_listener_ = position_listener;
+        is_initialized_ = true;
     }
 
     /**
@@ -26,7 +26,7 @@ public:
     /**
 	* @brief Send a command to set the home position of the vehicle (px4)
 	*/
-    void set_home_fc(double latitude, double longitude, double altitude) override {
+    void set_home_fc(double lat_deg, double lon_deg, float alt_amsl_m) override {
         RCLCPP_INFO(this->get_logger(), "SetHome command send");
     }
 
@@ -59,21 +59,9 @@ public:
     }
 
     /**
-    * @brief Publish a command to let the vehicle hover in a given ned position.
-    */
-    void hover_in_position(double hover_north, double hover_east, double hover_down, double roll, double pitch, double yaw) override {
-    }
-
-    /**
-    * @brief Publish a command to let the vehicle hover in the current position.
-    */
-    void hover_in_current_position() override {
-    }
-
-    /**
     * @brief Publish a trajectory setpoint to a gps coordinate returns the distance left to the target while moving towards the target, dont decrease the distances, the target NED trajectory point should stay constant
     */
-    double move_to_gps(double latitude, double longitude, double altitude, HEADING heading) override {
+    double move_to_gps(double latitude, double longitude, double altitude, HEADING heading, double speed_ms=3.0) override {
         return 0.0;
     }
 
@@ -86,18 +74,10 @@ public:
 
 
 
-    double publish_circle_poi(double radius, double speed, double latitude, double longitude, double height) override {
-        return 0.0;
+    void publish_circle_poi(double radius, double speed, double latitude, double longitude, double height) override {
+        return;
     }
 
-private:
-    std::string name_prefix_;
-
-	std::shared_ptr<VehicleGlobalPositionListener_Base> position_listener_;
-	std::shared_ptr<VehicleStatusListener_Base> vehicle_status_listener_;
-	std::shared_ptr<GeodeticConverter> gps_converter_;
-
-public:
     /**
     * @brief Send a command to enable position control (PX4)
     */

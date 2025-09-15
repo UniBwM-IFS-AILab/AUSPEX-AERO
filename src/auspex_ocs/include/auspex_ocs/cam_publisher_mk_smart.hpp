@@ -6,13 +6,12 @@
 #include <opencv2/opencv.hpp>
 #include <cv_bridge/cv_bridge.h>
 
-class MkSmartCamPublisher : public rclcpp::Node
-{
+class MkSmartCamPublisher : public CamPublisherBase{
 public:
     MkSmartCamPublisher(std::string platform_id, const float fps);
-    ~MkSmartCamPublisher();
+    ~MkSmartCamPublisher() override;
 
-    void captureFrame();
+    void captureFrame() override;
 
 private:
     const std::string stream_url_;

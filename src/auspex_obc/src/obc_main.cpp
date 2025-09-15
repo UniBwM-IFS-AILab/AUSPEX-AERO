@@ -20,7 +20,7 @@ std::string getHomeDirectory() {
     return std::string(home);
 }
 
-std::string register_platform(json& config){
+std::string register_platform(json& config, float* return_cam_fps) {
 	std::shared_ptr<rclcpp::Node> node = rclcpp::Node::make_shared("platform_registry_client_node");
 	rclcpp::Client<ExistsKnowledge>::SharedPtr exists_knowledge_client_ = node->create_client<ExistsKnowledge>("exists_knowledge");
 	rclcpp::Client<InsertKnowledge>::SharedPtr insert_knowledge_client_ = node->create_client<InsertKnowledge>("insert_knowledge");
@@ -108,8 +108,10 @@ std::string register_platform(json& config){
 		sensor_msg.fov_hor_max = sensor["specifications"]["fov"]["horizontal"]["max"];
 		sensor_msg.fov_vert_min = sensor["specifications"]["fov"]["vertical"]["min"];
 		sensor_msg.fov_vert_max = sensor["specifications"]["fov"]["vertical"]["max"];
-		sensor_msg.image_width = sensor["specifications"]["image_width"];
-		sensor_msg.image_height = sensor["specifications"]["image_height"];
+		sensor_msg.image_width = sensor["specifications"]["image_size"]["width"];
+		sensor_msg.image_height = sensor["specifications"]["image_size"]["height"];
+
+		*return_cam_fps = sensor["specifications"]["image_fps"];
 
 		sensor_capabilities_msg.push_back(sensor_msg);
 	}
@@ -135,7 +137,6 @@ std::string register_platform(json& config){
 	return platform_id;
 }
 
-
 // for running multiple nodes, see as Example https://docs.ros.org/en/foxy/Tutorials/Demos/Intra-Process-Communication.html
 int main(int argc, char* argv[]) {
 	RCLCPP_INFO(rclcpp::get_logger("main"),"Starting nodes...");
@@ -146,7 +147,6 @@ int main(int argc, char* argv[]) {
 
 	// Important to ba an env variable because omits airsim while building
 	std::string FC_TYPE = getEnvVar("FC_TYPE");
-	std::string OBC_TYPE = getEnvVar("OBC_TYPE"); // Not used. Just for completeness
 	std::string CAM_TYPE = getEnvVar("CAM_TYPE");
 
 	file_path =  getHomeDirectory() + "/auspex_params/platform_properties/platform_properties.json";
@@ -181,8 +181,10 @@ int main(int argc, char* argv[]) {
 		}
 	}
 
+	float cam_fps_ = 1.0;
+
 	// Try to register platform to BK
-	std::string platform_id = register_platform(config);
+	std::string platform_id = register_platform(config, &cam_fps_);
 
 	if(platform_id == ""){
 		RCLCPP_INFO(rclcpp::get_logger("main"), "Shutting down...");
@@ -190,35 +192,39 @@ int main(int argc, char* argv[]) {
 		return -1;
 	}
 
-	std::shared_ptr<VehicleStatusListener_Base> vehicle_listener;
-	std::shared_ptr<VehicleGlobalPositionListener_Base> position_listener;
 	std::shared_ptr<FC_Interface_Base> fc_interface;
-
 	RCLCPP_INFO(rclcpp::get_logger("main"), "Platform: %s launching ...", platform_id.c_str());
 
-	if(FC_TYPE.find("PX4") != std::string::npos){
-		vehicle_listener = std::make_shared<VehicleStatusListener_PX4>(platform_id);
-		position_listener = std::make_shared<VehicleGlobalPositionListener_PX4>(platform_id);
-		fc_interface = std::make_shared<FC_Interface_PX4>(vehicle_listener, position_listener, platform_id);
-	}else if(FC_TYPE.find("ANAFI") != std::string::npos){
-		vehicle_listener = std::make_shared<VehicleStatusListener_ANAFI>(platform_id);
-		position_listener = std::make_shared<VehicleGlobalPositionListener_ANAFI>(platform_id);
-		fc_interface = std::make_shared<FC_Interface_ANAFI>(vehicle_listener, position_listener, platform_id);
+	if(FC_TYPE.find("ANAFI") != std::string::npos){
+		std::shared_ptr<VehicleStatusListener_Base> vehicle_status_listener = std::make_shared<VehicleStatusListener_ANAFI>(platform_id);
+		std::shared_ptr<VehicleGlobalPositionListener_Base> position_listener = std::make_shared<VehicleGlobalPositionListener_ANAFI>(platform_id);
+		fc_interface = std::make_shared<FC_Interface_ANAFI>(vehicle_status_listener, position_listener, platform_id);
+	}else{
+		fc_interface = std::make_shared<FC_Interface_MAVSDK>(platform_id, FC_TYPE);
 	}
 
-	auto cam_publisher = std::make_shared<CamPublisher>(platform_id, 1.0);
+	if(fc_interface->get_is_initialized() == false){
+		RCLCPP_ERROR(rclcpp::get_logger("main"), "FC Interface %s could not be initialized, shutting down..", platform_id.c_str());
+		rclcpp::shutdown();
+		return -1;
+	}
+
+	auto cam_publisher = std::make_shared<CamPublisher>(platform_id, cam_fps_);
 	auto drone_state_publisher = std::make_shared<DroneStatePublisher>(platform_id, config);
 
-	RCLCPP_INFO(rclcpp::get_logger("main"), "Waiting for GPS Position Publisher...");
-	rclcpp::spin_until_future_complete(position_listener, position_listener->get_next_gps_future());
-
+	RCLCPP_INFO(rclcpp::get_logger("main"), "Waiting for GPS init...");
+	while (!fc_interface->get_position_listener()->get_first_gps_future()) {
+		RCLCPP_INFO(rclcpp::get_logger("main"), "Waiting for GPS init...");
+		fc_interface->get_position_listener()->update_home_position();
+		std::this_thread::sleep_for(std::chrono::seconds(1));
+	}
 	RCLCPP_INFO(rclcpp::get_logger("main"), "Launching Offboard Control node...");
-	auto controller = std::make_shared<OffboardController>(vehicle_listener, position_listener, fc_interface, drone_state_publisher, cam_publisher, platform_id);
+	auto controller = std::make_shared<OffboardController>(fc_interface->get_vehicle_status_listener(), fc_interface->get_position_listener(), fc_interface, drone_state_publisher, cam_publisher, platform_id);
 
 
 	rclcpp::executors::MultiThreadedExecutor executor;
-	executor.add_node(vehicle_listener);
-	executor.add_node(position_listener);
+	executor.add_node(fc_interface->get_vehicle_status_listener());
+	executor.add_node(fc_interface->get_position_listener());
 	executor.add_node(cam_publisher);
 	executor.add_node(drone_state_publisher);
 	executor.add_node(controller);
