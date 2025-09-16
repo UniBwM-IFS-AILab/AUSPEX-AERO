@@ -11,7 +11,7 @@
 class RPICamPublisher : public CamPublisherBase {
 public:
 
-    RPICamPublisher(const std::string& platform_id, const float fps);
+    RPICamPublisher(const std::string& platform_id, const int transmitHeight, const int transmitWidth, const float fps);
     ~RPICamPublisher() override;
 
     void captureFrame() override;

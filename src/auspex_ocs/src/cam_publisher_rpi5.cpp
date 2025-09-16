@@ -1,10 +1,8 @@
 #include "auspex_ocs/cam_publisher_rpi5.hpp"
 
-RPI5CamPublisher::RPI5CamPublisher(const std::string& platform_id, const float fps)
-    : CamPublisherBase(platform_id, "rpi5_cam_publisher", fps),
-      buffer_(nullptr),
-      transmitWidth_(640),
-      transmitHeight_(520)
+RPI5CamPublisher::RPI5CamPublisher(const std::string& platform_id, const int transmitHeight, const int transmitWidth, const float fps)
+    : CamPublisherBase(platform_id, "rpi5_cam_publisher", transmitHeight, transmitWidth, fps),
+      buffer_(nullptr)
 {
     // initialize libcamera
     initCamera();

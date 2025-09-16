@@ -1,7 +1,7 @@
 #include "auspex_ocs/cam_publisher_mk_smart.hpp"
 
-MkSmartCamPublisher::MkSmartCamPublisher(std::string platform_id, const float fps)
-    : CamPublisherBase(platform_id, "mk_smart_cam_publisher", fps),
+MkSmartCamPublisher::MkSmartCamPublisher(std::string platform_id, const int transmitHeight, const int transmitWidth, const float fps)
+    : CamPublisherBase(platform_id, "mk_smart_cam_publisher", transmitHeight, transmitWidth, fps),
     stream_url_("rtsp://192.168.144.25:8554/video1"),
     capture_()
 {
@@ -36,6 +36,7 @@ void MkSmartCamPublisher::captureFrame()
 
     capture_.retrieve(frame);
 
+    cv::resize(frame, frame, cv::Size(transmitWidth_, transmitHeight_), 0, 0, cv::INTER_LINEAR);
 
     std::vector<int> compression_params;
     compression_params.push_back(cv::IMWRITE_JPEG_QUALITY);
@@ -55,8 +56,8 @@ void MkSmartCamPublisher::captureFrame()
     image_msg.platform_id = platform_id_;
     image_msg.team_id = "drone_team";
     image_msg.fps = fps_;
-    image_msg.res_width = 1280;
-    image_msg.res_height = 720;
+    image_msg.res_width = transmitWidth_;
+    image_msg.res_height = transmitHeight_;
 
     if (gps_listener_) {
         auto g = gps_listener_->get_recent_gps_msg();

@@ -16,6 +16,7 @@
 #include "auspex_msgs/msg/object_knowledge.hpp"
 #include "auspex_msgs/msg/execute_atom.hpp"
 #include "auspex_msgs/msg/altitude_level.hpp"
+#include "auspex_msgs/msg/platform_command.hpp"
 
 #include "auspex_msgs/srv/get_origin.hpp"
 #include "auspex_msgs/srv/set_origin.hpp"
@@ -31,11 +32,6 @@
 #include "auspex_fci/fc_interface_base.hpp"
 #include "auspex_fci/position_listener_base.hpp"
 #include "auspex_fci/status_listener_base.hpp"
-
-// For PX4
-// #include "auspex_fci/px4/fc_interface_px4.hpp"
-// #include "auspex_fci/px4/position_listener_px4.hpp"
-// #include "auspex_fci/px4/status_listener_px4.hpp"
 
 // For MavSDk
 #include "auspex_fci/mavsdk/fc_interface_mavsdk.hpp"
@@ -57,8 +53,8 @@
 
 #ifdef SWITCH_CAM_HEADER
 	#if SWITCH_CAM_HEADER == 1
-		#include <auspex_ocs/cam_publisher_sim.hpp>
-		typedef SimCamPublisher CamPublisher;
+		#include <auspex_ocs/cam_publisher_simUE.hpp>
+		typedef SimCamPublisherUE CamPublisher;
 	#elif SWITCH_CAM_HEADER == 2
 		#include <auspex_ocs/cam_publisher_rpi5.hpp>
 		typedef RPI5CamPublisher CamPublisher;
@@ -68,6 +64,9 @@
 	#elif SWITCH_CAM_HEADER == 4
 		#include <auspex_ocs/cam_publisher_mk_smart.hpp>
 		typedef MkSmartCamPublisher CamPublisher;
+	#elif SWITCH_CAM_HEADER == 5
+		#include <auspex_ocs/cam_publisher_simIS.hpp>
+		typedef SimCamPublisherIS CamPublisher;
 	#elif SWITCH_CAM_HEADER == 0
 		#include <auspex_ocs/cam_publisher_empty.hpp>
 		typedef EmptyCamPublisher CamPublisher;
@@ -95,6 +94,7 @@ using ObjectKnowledge = auspex_msgs::msg::ObjectKnowledge;
 using PoseStamped = geometry_msgs::msg::PoseStamped;
 using ExecuteAtom = auspex_msgs::msg::ExecuteAtom;
 using AltitudeLevel = auspex_msgs::msg::AltitudeLevel;
+using PlatformCommand = auspex_msgs::msg::PlatformCommand;
 
 // action
 using ExecuteSequence = auspex_msgs::action::ExecuteSequence;
@@ -123,7 +123,40 @@ public:
 					std::shared_ptr<CamPublisher> cam_publisher,
 					std::string name_prefix = "") ;
 
-	~OffboardController() = default;
+	/**
+	 * @brief Destructor - properly cleanup OBC resources
+	 */
+	~OffboardController() {
+		// Cancel timer to prevent further callbacks
+		if (timer_) {
+			timer_->cancel();
+			timer_.reset();
+		}
+
+		// Clear the execution queue safely
+		{
+			std::lock_guard<std::mutex> lock(execute_queue_lock);
+			executeSequenceQueue.clear();
+		}
+
+		// Reset service and action server pointers
+		sequence_action_server_.reset();
+		get_origin_service_.reset();
+		set_origin_service_.reset();
+		handle_add_action_service_.reset();
+		get_altitude_client.reset();
+		platform_command_listener_.reset();
+
+		// Reset shared pointers to managed objects
+		vehicle_status_listener_.reset();
+		position_listener_.reset();
+		drone_state_publisher_.reset();
+		camera_publisher_.reset();
+		fc_interface_.reset();
+		gps_converter_.reset();
+
+		RCLCPP_INFO(get_logger(), "OffboardController destructor completed");
+	}
 
 	double getHeightAMSL(AltitudeLevel level, double value);
 	double get_groundHeight_amsl();
@@ -149,7 +182,7 @@ private:
 
 	rclcpp::Client<GetAltitude>::SharedPtr get_altitude_client;
 
-	rclcpp::Subscription<UserCommand>::SharedPtr handle_user_command_listener_;
+	rclcpp::Subscription<PlatformCommand>::SharedPtr platform_command_listener_;
 
 	rclcpp::TimerBase::SharedPtr timer_;
 
@@ -222,7 +255,7 @@ private:
 
 	void set_origin(const std::shared_ptr<auspex_msgs::srv::SetOrigin::Request> request, std::shared_ptr<auspex_msgs::srv::SetOrigin::Response> response);
 
-	void handle_user_command(const UserCommand::SharedPtr msg);
+	void handle_platform_command(const PlatformCommand::SharedPtr msg);
 
 	void handle_add_action(const std::shared_ptr<auspex_msgs::srv::AddAction::Request> request, std::shared_ptr<auspex_msgs::srv::AddAction::Response> response);
 

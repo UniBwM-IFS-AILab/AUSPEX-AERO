@@ -2,7 +2,7 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.substitutions import LaunchConfiguration
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, TimerAction
 import json
 import os
 
@@ -28,17 +28,27 @@ def launch_setup(context, *args, **kwargs):
 
     launch_array =  []
 
+    delay_seconds = 0.5 
+
     for x in range(0, count):
         name_prefix = platform_id + '_' + str(x)
-        launch_array.append(
-            Node(
-                package='auspex_obc',
-                executable='auspex_obc',
-                output='screen',
-                shell=True,
-                arguments=[name_prefix]
-            )
+        node_action = Node(
+            package='auspex_obc',
+            executable='auspex_obc',
+            output='screen',
+            shell=True,
+            arguments=[name_prefix]
         )
+        # Add delay before launching each node except the first
+        if x == 0:
+            launch_array.append(node_action)
+        else:
+            launch_array.append(
+                TimerAction(
+                    period=delay_seconds * x,
+                    actions=[node_action]
+                )
+            )
     return launch_array
 
 # declare command line argument via appending count:=NUMBER when starting the launch file from terminal

@@ -1,7 +1,7 @@
 #include "auspex_ocs/cam_publisher_rpi.hpp"
 
-RPICamPublisher::RPICamPublisher(const std::string& platform_id, const float fps)
-    : CamPublisherBase(platform_id, "rpi_cam_publisher", fps)
+RPICamPublisher::RPICamPublisher(const std::string& platform_id, const int transmitHeight, const int transmitWidth, const float fps)
+    : CamPublisherBase(platform_id, "rpi_cam_publisher", transmitHeight, transmitWidth, fps)
 {
     initCamera();
 }
@@ -48,8 +48,8 @@ void RPICamPublisher::captureFrame() {
     image_msg.image_compressed.header.stamp = get_clock()->now();
     image_msg.image_compressed.format = "jpeg";
     image_msg.fps        = static_cast<int>(fps_);
-    image_msg.res_width  = frame.cols;
-    image_msg.res_height = frame.rows;
+    image_msg.res_width  = transmitWidth_;
+    image_msg.res_height = transmitHeight_;
 
     if (gps_listener_) {
         auto g = gps_listener_->get_recent_gps_msg();

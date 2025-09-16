@@ -8,7 +8,7 @@
 
 class MkSmartCamPublisher : public CamPublisherBase{
 public:
-    MkSmartCamPublisher(std::string platform_id, const float fps);
+    MkSmartCamPublisher(std::string platform_id, const int transmitHeight, const int transmitWidth, const float fps);
     ~MkSmartCamPublisher() override;
 
     void captureFrame() override;

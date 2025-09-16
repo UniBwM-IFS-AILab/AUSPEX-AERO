@@ -9,7 +9,6 @@ find_package(ament_cmake REQUIRED)
 find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(cv_bridge REQUIRED)
-find_package(OpenCV REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc highgui xphoto)
 find_package(image_transport REQUIRED)
 find_package(auspex_fci REQUIRED)
@@ -38,12 +37,17 @@ endif()
 set(CAM_LIST $ENV{CAM_TYPE})
 list(GET CAM_LIST 0 FIRST_CAM)
 
-if(FIRST_CAM STREQUAL "SIM")
-  set(AIRSIM_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../AirSim)
+if(FIRST_CAM STREQUAL "SIM_IS")
+
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(ZMQ libzmq)
+
+elseif(FIRST_CAM STREQUAL "SIM_UE")
+
+  set(AIRSIM_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../AirSim CACHE PATH "")
   add_subdirectory("${AIRSIM_ROOT}/cmake/rpclib_wrapper" rpclib_wrapper)
-  add_subdirectory("${AIRSIM_ROOT}/cmake/AirLib"      AirLib)
-  add_subdirectory("${AIRSIM_ROOT}/cmake/MavLinkCom"  MavLinkCom)
-  set(RPC_LIB_INCLUDES "${AIRSIM_ROOT}/external/rpclib/rpclib-2.3.0/include")
+  add_subdirectory("${AIRSIM_ROOT}/cmake/MavLinkCom"     MavLinkCom)
+  add_subdirectory("${AIRSIM_ROOT}/cmake/AirLib"         AirLib)
 
 elseif(FIRST_CAM STREQUAL "RPI5")
 
@@ -56,7 +60,9 @@ endif()
 # sources
 set(SRC
   src/cam_publisher_base.cpp
-  $<$<STREQUAL:${FIRST_CAM},SIM>:src/cam_publisher_sim.cpp>
+  $<$<STREQUAL:${FIRST_CAM},SIM_UE>:src/cam_publisher_simUE.cpp>
+  $<$<STREQUAL:${FIRST_CAM},SIM_UE>:src/airsim_connection_manager.cpp>
+  $<$<STREQUAL:${FIRST_CAM},SIM_IS>:src/cam_publisher_simIS.cpp>
   $<$<STREQUAL:${FIRST_CAM},RPI5>:src/cam_publisher_rpi5.cpp>
   $<$<STREQUAL:${FIRST_CAM},RPI>:src/cam_publisher_rpi.cpp>
   $<$<STREQUAL:${FIRST_CAM},ZT30>:src/cam_publisher_mk_smart.cpp>
@@ -75,12 +81,12 @@ target_include_directories(auspex_ocs
     ${auspex_fci_INCLUDE_DIRS}
     ${geographic_msgs_INCLUDE_DIRS}
 
-    $<$<STREQUAL:${FIRST_CAM},SIM>:${RPC_LIB_INCLUDES}>
-    $<$<STREQUAL:${FIRST_CAM},SIM>:${AIRSIM_ROOT}/AirLib/include>
-    $<$<STREQUAL:${FIRST_CAM},SIM>:${AIRSIM_ROOT}/AirLib/deps/eigen3>
-    $<$<STREQUAL:${FIRST_CAM},SIM>:${AIRSIM_ROOT}/MavLinkCom/include>
-    $<$<STREQUAL:${FIRST_CAM},SIM>:${AIRSIM_ROOT}/MavLinkCom/common_utils>
+    $<$<STREQUAL:${FIRST_CAM},SIM_UE>:${AIRSIM_ROOT}/AirLib/include>
+    $<$<STREQUAL:${FIRST_CAM},SIM_UE>:${AIRSIM_ROOT}/AirLib/deps/eigen3>
+    $<$<STREQUAL:${FIRST_CAM},SIM_UE>:${AIRSIM_ROOT}/MavLinkCom/include>
+    $<$<STREQUAL:${FIRST_CAM},SIM_UE>:${AIRSIM_ROOT}/MavLinkCom/common_utils>
     $<$<STREQUAL:${FIRST_CAM},RPI5>:${LIBCAMERA_INCLUDE_DIRS}>
+    $<$<STREQUAL:${FIRST_CAM},SIM_IS>:${ZMQ_INCLUDE_DIRS}>
 )
 
 # ————————————————————————————————
@@ -96,15 +102,12 @@ target_include_directories(auspex_ocs
     ${OpenCV_LIBS}
     MAVSDK::mavsdk
    PRIVATE
-     $<$<STREQUAL:${FIRST_CAM},SIM>:AirLib>
-     $<$<STREQUAL:${FIRST_CAM},SIM>:MavLinkCom>
+     $<$<STREQUAL:${FIRST_CAM},SIM_UE>:AirLib>
+     $<$<STREQUAL:${FIRST_CAM},SIM_UE>:MavLinkCom>
      $<$<STREQUAL:${FIRST_CAM},RPI5>:${LIBCAMERA_LIBRARIES}>
      $<$<STREQUAL:${FIRST_CAM},RPI5>:${LIBCAMERA_BASE_LIBRARIES}>
+     $<$<STREQUAL:${FIRST_CAM},SIM_IS>:${ZMQ_LIBRARIES}>
  )
-
-#if(hat_menthon_FOUND AND MSG_CONTEXT_MENTHON)
-#  target_link_libraries(auspex_ocs PRIVATE hat_menthon::hat_menthon)
-#endif()
 
 # ————————————————————————————————
 # install headers & library

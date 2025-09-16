@@ -1,9 +1,11 @@
 #include "auspex_ocs/cam_publisher_base.hpp"
 
-CamPublisherBase::CamPublisherBase(const std::string& platform_id, const std::string& node_name, float fps)
+CamPublisherBase::CamPublisherBase(const std::string& platform_id, const std::string& node_name, const int transmitHeight, const int transmitWidth, float fps)
     : Node(platform_id + "_" + node_name),
     fps_(fps),
-    platform_id_(platform_id)
+    platform_id_(platform_id),
+    transmitWidth_(transmitWidth),
+    transmitHeight_(transmitHeight)
 {
     rmw_qos_profile_t sensor_profile = rmw_qos_profile_sensor_data;
     auto sensor_qos = rclcpp::QoS(

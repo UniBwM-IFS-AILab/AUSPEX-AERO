@@ -104,6 +104,30 @@ public:
     }
 
     /**
+     * @brief Destructor - properly cleanup MAVSDK resources
+     */
+    ~FC_Interface_MAVSDK() {
+        if (offboard_ && offboard_->is_active()) {
+            offboard_->stop();
+        }
+        
+        // Reset shared pointers to ensure proper cleanup order
+        action_.reset();
+        offboard_.reset();
+        param_.reset();
+        passthrough_.reset();
+        
+        // Reset listeners
+        vehicle_status_listener_.reset();
+        position_listener_.reset();
+        
+        // Reset system pointer
+        system_.reset();
+        
+        RCLCPP_INFO(get_logger(), "FC_Interface_MAVSDK destructor completed");
+    }
+
+    /**
      * @brief To get the gps converter. Must be here because one gps message needs to be send to initaliaze.
      */
     void set_gps_converter(std::shared_ptr<GeodeticConverter> gps_converter) override {
@@ -124,6 +148,20 @@ public:
         cmd.param7        = alt_amsl_m;
 
         passthrough_->send_command_long(cmd);
+    }
+
+    void terminate() override {
+        action_->terminate_async([](Action::Result result) {
+            // Empty callback, do nothing with result
+        });
+        RCLCPP_INFO(this->get_logger(), "Terminate command sent");
+    }
+
+    void kill() override {
+        action_->kill_async([](Action::Result result) {
+            // Empty callback, do nothing with result
+        });
+        RCLCPP_INFO(this->get_logger(), "Kill command sent");
     }
 
     /**
@@ -257,12 +295,24 @@ public:
             setpoint.alt_m = altitude;
             setpoint.altitude_type = Offboard::PositionGlobalYaw::AltitudeType::Amsl;
             setpoint.yaw_deg = target_yaw * 180.0 / M_PI;
+
+            float speed_degree_s = 5.0;
+            float acc_degree_s2 = 5.0;
+
+            int ardu_speed_degree_s = 360;
+            int ardu_acc_cdegree_s2 = 9000;
+
             if(current_speed_m_s != speed_m_s){
                 if (FC_TYPE_ == "ARDUPILOT") {
                     int speed_cm_s = static_cast<int>(speed_m_s * 100.0f);
                     param_->set_param_int("WPNAV_SPEED", static_cast<int>(speed_cm_s));
+                    param_->set_param_int("ATC_RATE_Y_MAX", ardu_speed_degree_s);
+                    param_->set_param_int("ATC_ACCEL_Y_MAX", ardu_acc_cdegree_s2);
+                    param_->set_param_int("ATC_SLEW_YAW", 500); //cdeg/s
                 } else {
                     param_->set_param_float("MPC_XY_VEL_MAX", static_cast<float>(speed_m_s));
+                    param_->set_param_float("MPC_YAWRAUTO_ACC", speed_degree_s);
+                    param_->set_param_float("MPC_YAWRAUTO_MAX", acc_degree_s2);
                 }
                 current_speed_m_s = speed_m_s;
             }

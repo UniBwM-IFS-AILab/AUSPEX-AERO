@@ -23,7 +23,7 @@ OffboardController::OffboardController(	std::shared_ptr<VehicleStatusListener_Ba
 	rmw_qos_profile_t qos_profile = rmw_qos_profile_sensor_data;
 	auto qos = rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 5), qos_profile);
 
-	handle_user_command_listener_ =  this->create_subscription<UserCommand>(name_prefix + "/user_command", qos, std::bind(&OffboardController::handle_user_command, this, _1));
+	platform_command_listener_ =  this->create_subscription<PlatformCommand>(name_prefix + "/platform_command", qos, std::bind(&OffboardController::handle_platform_command, this, _1));
 
 	gps_converter_ = std::make_shared<GeodeticConverter>(position_listener_->get_recent_home_msg()->latitude_deg, position_listener_->get_recent_home_msg()->longitude_deg, position_listener_->get_recent_home_msg()->absolute_altitude_m);
 	fc_interface_->set_gps_converter(gps_converter_);
@@ -1137,6 +1137,7 @@ int OffboardController::execute_landing(const std::shared_ptr<rclcpp_action::Ser
 			this->position_listener_->set_recent_platform_state("LANDED");
 			loop_rate.sleep();
 			RCLCPP_INFO(this->get_logger(), "Landing succeeded");
+			fc_interface_->disarm();
 			break;
 		}
 	}
@@ -1254,29 +1255,39 @@ void OffboardController::handle_add_action(const std::shared_ptr<auspex_msgs::sr
 }
 
 /**
-*@brief Handles user commands NOT IMPLEMENTED
+*@brief Handles platform commands
 */
-void OffboardController::handle_user_command(const UserCommand::SharedPtr msg){
-	if(msg->user_command == UserCommand::USER_CANCEL){
+void OffboardController::handle_platform_command(const PlatformCommand::SharedPtr msg){
+	if(msg->platform_command == PlatformCommand::PLATFORM_CANCEL){
 		RCLCPP_ERROR(this->get_logger(), "Not Implemented!");
-	}else if(msg->user_command == UserCommand::USER_PAUSE){
-		RCLCPP_INFO(this->get_logger(), "User Requested Pause.");
+	}else if(msg->platform_command == PlatformCommand::PLATFORM_PAUSE){
+		RCLCPP_INFO(this->get_logger(), "Requested Pause.");
 		vehicle_status_listener_->set_paused_from_extern(true);
 		if(is_flying_){
 			this->position_listener_->set_recent_platform_state("AIRBORNE - PAUSED");
 		}else{
 			this->position_listener_->set_recent_platform_state("PAUSED");
 		}
-	}else if(msg->user_command == UserCommand::USER_RESUME){
+	}else if(msg->platform_command == PlatformCommand::PLATFORM_RESUME){
 		vehicle_status_listener_->set_paused_from_extern(false);
 		if(is_flying_){
 			this->position_listener_->set_recent_platform_state("AIRBORNE");
 		}else{
 			this->position_listener_->set_recent_platform_state("LANDED");
 		}
-		RCLCPP_INFO(this->get_logger(), "User Requested Resume.");
+		RCLCPP_INFO(this->get_logger(), "Requested Resume.");
+	}else if(msg->platform_command == PlatformCommand::PLATFORM_TERMINATE){
+		RCLCPP_INFO(this->get_logger(), "Requested Terminate.");
+		this->fc_interface_->terminate();
+		rclcpp::sleep_for(std::chrono::seconds(4));
+		rclcpp::shutdown();
+	}else if(msg->platform_command == PlatformCommand::PLATFORM_KILL){
+		RCLCPP_INFO(this->get_logger(), "Requested Kill.");
+		this->fc_interface_->kill();
+		rclcpp::sleep_for(std::chrono::seconds(4));
+		rclcpp::shutdown();
 	}else{
-		RCLCPP_INFO(this->get_logger(), "Got Command which is not implemented");
+		RCLCPP_ERROR(this->get_logger(), "Unknown Platform Command.");
 	}
 }
 

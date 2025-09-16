@@ -20,7 +20,7 @@ std::string getHomeDirectory() {
     return std::string(home);
 }
 
-std::string register_platform(json& config, float* return_cam_fps) {
+std::string register_platform(json& config, float* return_img_width, float* return_img_height, float* return_cam_fps) {
 	std::shared_ptr<rclcpp::Node> node = rclcpp::Node::make_shared("platform_registry_client_node");
 	rclcpp::Client<ExistsKnowledge>::SharedPtr exists_knowledge_client_ = node->create_client<ExistsKnowledge>("exists_knowledge");
 	rclcpp::Client<InsertKnowledge>::SharedPtr insert_knowledge_client_ = node->create_client<InsertKnowledge>("insert_knowledge");
@@ -111,6 +111,8 @@ std::string register_platform(json& config, float* return_cam_fps) {
 		sensor_msg.image_width = sensor["specifications"]["image_size"]["width"];
 		sensor_msg.image_height = sensor["specifications"]["image_size"]["height"];
 
+		*return_img_width = sensor["specifications"]["image_size"]["width"];
+		*return_img_height = sensor["specifications"]["image_size"]["height"];
 		*return_cam_fps = sensor["specifications"]["image_fps"];
 
 		sensor_capabilities_msg.push_back(sensor_msg);
@@ -182,9 +184,11 @@ int main(int argc, char* argv[]) {
 	}
 
 	float cam_fps_ = 1.0;
+	float image_height = 1.0;
+	float image_width = 1.0;
 
 	// Try to register platform to BK
-	std::string platform_id = register_platform(config, &cam_fps_);
+	std::string platform_id = register_platform(config, &image_width, &image_height, &cam_fps_);
 
 	if(platform_id == ""){
 		RCLCPP_INFO(rclcpp::get_logger("main"), "Shutting down...");
@@ -209,7 +213,7 @@ int main(int argc, char* argv[]) {
 		return -1;
 	}
 
-	auto cam_publisher = std::make_shared<CamPublisher>(platform_id, cam_fps_);
+	auto cam_publisher = std::make_shared<CamPublisher>(platform_id, image_height, image_width, cam_fps_);
 	auto drone_state_publisher = std::make_shared<DroneStatePublisher>(platform_id, config);
 
 	RCLCPP_INFO(rclcpp::get_logger("main"), "Waiting for GPS init...");

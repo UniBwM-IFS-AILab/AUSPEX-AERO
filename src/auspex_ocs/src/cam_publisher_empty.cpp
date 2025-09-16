@@ -1,7 +1,7 @@
 #include "auspex_ocs/cam_publisher_empty.hpp"
 
-EmptyCamPublisher::EmptyCamPublisher(const std::string& platform_id, const float fps)
-    : CamPublisherBase(platform_id, "empty_cam_publisher", fps)
+EmptyCamPublisher::EmptyCamPublisher(const std::string& platform_id, const int transmitHeight, const int transmitWidth, const float fps)
+    : CamPublisherBase(platform_id, "empty_cam_publisher", transmitHeight, transmitWidth, fps)
 {
 }
 

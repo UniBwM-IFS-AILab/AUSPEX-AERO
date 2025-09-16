@@ -29,6 +29,16 @@ public:
     virtual void set_home_fc(double lat_deg, double lon_deg, float alt_amsl_m)= 0;
 
     /**
+    * @brief Send a command to the vehicle to terminate. Terminate is shutdown routine.
+    */
+    virtual void terminate() = 0;
+
+    /**
+    * @brief Send a command to the vehicle to kill. Kill is motor stop.
+    */
+    virtual void kill() = 0;
+
+    /**
     * @brief Send a command to the vehicle to take off 10 meters <-- altitude is not relative to the ground
     */
     virtual bool takeoff(double takeoff_height) = 0;

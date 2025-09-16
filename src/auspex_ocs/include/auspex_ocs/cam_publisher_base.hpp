@@ -18,7 +18,7 @@
 class CamPublisherBase : public rclcpp::Node {
 public:
 
-  CamPublisherBase(const std::string& platform_id, const std::string& node_name, const float fps);
+  CamPublisherBase(const std::string& platform_id, const std::string& node_name, const int transmitHeight, const int transmitWidth, const float fps);
   virtual ~CamPublisherBase() = default;
 
   void startCapture(std::shared_ptr<VehicleGlobalPositionListener_Base> gps_listener);
@@ -39,6 +39,9 @@ protected:
   std::shared_ptr<VehicleGlobalPositionListener_Base> gps_listener_;
   rclcpp::TimerBase::SharedPtr timer_;
   mutable std::mutex capture_mutex_;
+
+  int transmitWidth_;
+  int transmitHeight_;
 };
 
 #endif // CAM_PUBLISHER_BASE_HPP

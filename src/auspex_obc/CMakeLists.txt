@@ -102,7 +102,7 @@ target_link_libraries(auspex_obc_lib
 # auspex_obc
 add_executable(auspex_obc src/obc_main.cpp)
 
-if("${FIRST_CAM}" STREQUAL "SIM")
+if("${FIRST_CAM}" STREQUAL "SIM_UE")
   target_compile_definitions(auspex_obc_lib PRIVATE SWITCH_CAM_HEADER=1)
   target_compile_definitions(auspex_obc PRIVATE SWITCH_CAM_HEADER=1)
 elseif("${FIRST_CAM}" STREQUAL "RPI5")
@@ -114,6 +114,9 @@ elseif("${FIRST_CAM}" STREQUAL "RPI")
 elseif("${FIRST_CAM}" STREQUAL "ZT30")
   target_compile_definitions(auspex_obc_lib PRIVATE SWITCH_CAM_HEADER=4)
   target_compile_definitions(auspex_obc PRIVATE SWITCH_CAM_HEADER=4)
+elseif("${FIRST_CAM}" STREQUAL "SIM_IS")
+  target_compile_definitions(auspex_obc_lib PRIVATE SWITCH_CAM_HEADER=5)
+  target_compile_definitions(auspex_obc PRIVATE SWITCH_CAM_HEADER=5)
 elseif("${FIRST_CAM}" STREQUAL "NONE")
   target_compile_definitions(auspex_obc_lib PRIVATE SWITCH_CAM_HEADER=0)
   target_compile_definitions(auspex_obc PRIVATE SWITCH_CAM_HEADER=0)

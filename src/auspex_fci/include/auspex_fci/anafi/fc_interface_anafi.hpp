@@ -30,6 +30,14 @@ public:
         RCLCPP_INFO(this->get_logger(), "SetHome command send");
     }
 
+    void terminate() override {
+        RCLCPP_INFO(this->get_logger(), "Terminate command not implemented for Anafi");
+    }
+
+    void kill() override {
+        RCLCPP_INFO(this->get_logger(), "Kill command not implemented for Anafi");
+    }
+
     /**
     * @brief Send a command to the vehicle to take off 10 meters <-- altitude is not relative to the ground. Return true if flying
     */

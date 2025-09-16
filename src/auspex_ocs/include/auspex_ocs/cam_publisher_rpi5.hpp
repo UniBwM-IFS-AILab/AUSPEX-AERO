@@ -16,7 +16,7 @@
  */
 class RPI5CamPublisher : public CamPublisherBase {
 public:
-    RPI5CamPublisher(const std::string& platform_id, const float fps);
+    RPI5CamPublisher(const std::string& platform_id, const int transmitHeight, const int transmitWidth, const float fps);
     ~RPI5CamPublisher() override;
 
     void captureFrame() override;
@@ -31,9 +31,6 @@ private:
     std::unique_ptr<libcamera::Request>                    request_;
     libcamera::FrameBuffer*                                buffer_;
     cv::Ptr<cv::xphoto::SimpleWB>                          wb_;
-
-    int                                                    transmitWidth_;
-    int                                                    transmitHeight_;
 };
 
 #endif // RPI5_CAM_PUBLISHER_HPP
