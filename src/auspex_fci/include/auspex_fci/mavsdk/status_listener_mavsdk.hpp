@@ -11,7 +11,7 @@
 class VehicleStatusListener_MAVSDK : public VehicleStatusListener_Base {
 public:
     VehicleStatusListener_MAVSDK(std::string name_prefix, std::shared_ptr<mavsdk::System> system, std::string FC_TYPE)
-        : VehicleStatusListener_Base(name_prefix + "_vehicle_status_listener_mavsdk") {
+        : VehicleStatusListener_Base(name_prefix + "status_listener_mav") {
         mavsdk::Telemetry::Battery empty_bat_msg{};
         recent_battery_msg = std::make_shared<mavsdk::Telemetry::Battery>(std::move(empty_bat_msg));
 

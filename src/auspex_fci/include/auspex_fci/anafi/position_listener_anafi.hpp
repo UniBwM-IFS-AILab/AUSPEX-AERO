@@ -31,7 +31,7 @@ public:
         return gps_init_set.load();
     }
 
-    void update_home_position() override {
+    void is_home_position_set() override {
 
     }
 
@@ -69,6 +69,10 @@ public:
     void set_recent_platform_state(std::string new_platform_state) override {
 
     };
+
+    double get_fc_height() override {
+        return -1.0;
+    }
 
 private:
 	std::shared_ptr<mavsdk::Telemetry::Position> recent_gps_msg;

@@ -156,7 +156,7 @@ class GeodeticConverter
     *up = -aux_down;
   }
 
-  double geodeticDistance(double lat1, double lon1, double lat2, double lon2){
+  double geodeticDistance2D(double lat1, double lon1, double lat2, double lon2){
     double phi1 = lat1 * M_PI/180.0; // φ, λ in radians
     double phi2 = lat2 * M_PI/180.0;
     double d_phi = (lat2-lat1) * M_PI/180.0;
@@ -167,6 +167,21 @@ class GeodeticConverter
 
     double d = R * c; // in metres
     return d;
+  }
+
+
+  double geodeticDistance(double lat1, double lon1, double alt1, double lat2, double lon2, double alt2){
+    double phi1 = lat1 * M_PI/180.0; // φ, λ in radians
+    double phi2 = lat2 * M_PI/180.0;
+    double d_phi = (lat2-lat1) * M_PI/180.0;
+    double d_lambda = (lon2-lon1) * M_PI/180.0;
+
+    double a = sin(d_phi/2) * sin(d_phi/2) + cos(phi1) * cos(phi2) * sin(d_lambda/2) * sin(d_lambda/2);
+    double c = 2 * atan2(sqrt(a), sqrt(1-a));
+
+    double d_horizontal = R * c; // in metres
+    double d_alt = alt2 - alt1;
+    return sqrt(d_horizontal * d_horizontal + d_alt * d_alt);
   }
 
   void enu2Geodetic(const double east, const double north, const double up, double* latitude,

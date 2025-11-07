@@ -5,6 +5,9 @@
 #include "auspex_fci/status_listener_base.hpp"
 #include "auspex_fci/position_listener_base.hpp"
 
+// Forward declaration to avoid circular dependency
+class ExternalDataListener;
+
 
 class FC_Interface_ANAFI : public FC_Interface_Base {
 public:
@@ -21,6 +24,27 @@ public:
      */
     void set_gps_converter(std::shared_ptr<GeodeticConverter> gps_converter) override {
         gps_converter_ = gps_converter;
+    }
+
+    /**
+     * @brief Sets the external data listener for collision avoidance
+     */
+    void set_external_data_listener(std::shared_ptr<ExternalDataListener> external_data_listener) override {
+        external_data_listener_ = external_data_listener;
+    }
+
+    void set_height_delta(double height_delta) override {
+        // Not needed for ANAFI
+    }
+
+    /**
+     * @brief Initialize the safety guard with external data listener
+     * @param external_data_listener Pointer to external data listener
+     */
+    void initialize_safety_guard(std::shared_ptr<ExternalDataListener> external_data_listener) override {
+        // For ANAFI, we don't implement safety guard yet, but we need to satisfy the interface
+        external_data_listener_ = external_data_listener;
+        RCLCPP_INFO(this->get_logger(), "SafetyGuard initialization skipped for ANAFI platform");
     }
 
     /**
@@ -67,6 +91,20 @@ public:
     }
 
     /**
+     * @brief Set flight variables like speed
+     */
+    void set_flight_vars(double speed_m_s) override {
+        
+    }
+
+    /**
+     * @brief Move the vehicle to a specific angle
+     */
+    double move_to_angle(double roll, double pitch, double yaw, double speed_rads=0.1) override{
+        
+    }
+
+    /**
     * @brief Publish a trajectory setpoint to a gps coordinate returns the distance left to the target while moving towards the target, dont decrease the distances, the target NED trajectory point should stay constant
     */
     double move_to_gps(double latitude, double longitude, double altitude, HEADING heading, double speed_ms=3.0) override {
@@ -106,6 +144,13 @@ public:
     void publish_offboard_heartbeat() override {
        // Not needed
     }
+
+    virtual void set_servo_value(int servo_number, int pwm_value) override {
+        RCLCPP_INFO(this->get_logger(), "Set servo command not implemented for Anafi");
+    }
+
+private:
+    std::shared_ptr<ExternalDataListener> external_data_listener_;
 };
 
 #endif

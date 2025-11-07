@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>auspex_cam</name>
+  <version>0.1.0</version>
+  <description>Camera controller with custom ROS 2 services</description>
+
+  <maintainer email="bjoern.doeschl@unibw.de">root</maintainer>
+  <license>MIT</license>
+
+  <!-- Build system -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
+
+  <!-- Runtime for generated interfaces -->
+  <exec_depend>rosidl_default_runtime</exec_depend>
+
+  <!-- Core code deps -->
+  <build_depend>rclcpp</build_depend>
+  <exec_depend>rclcpp</exec_depend>
+  <build_depend>std_msgs</build_depend>
+  <exec_depend>std_msgs</exec_depend>
+
+  <!-- Only if referenced by your .srv -->
+  <build_depend>builtin_interfaces</build_depend>
+  <exec_depend>builtin_interfaces</exec_depend>
+
+  <!-- Other deps -->
+  <depend>sensor_msgs</depend>
+  <depend>msg_context_cpp</depend>
+  <depend>eigen</depend>
+  <depend>cv_bridge</depend>
+  <depend>auspex_fci</depend>
+  <depend>auspex_msgs</depend>
+
+  <!-- This must be TOP-LEVEL, not inside <export> -->
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <!-- Keep build type in export -->
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

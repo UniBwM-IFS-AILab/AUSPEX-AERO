@@ -13,7 +13,7 @@
 class VehicleGlobalPositionListener_MAVSDK : public VehicleGlobalPositionListener_Base{
 public:
     VehicleGlobalPositionListener_MAVSDK(std::string name_prefix, std::shared_ptr<mavsdk::System> system, std::string FC_TYPE)
-        : VehicleGlobalPositionListener_Base(name_prefix + "_" + "vehicle_global_position_listener_mavsdk") {
+        : VehicleGlobalPositionListener_Base(name_prefix + "_" + "fci_listener_mav") {
         mavsdk::Telemetry::Position empty_gps_msg{};
         recent_gps_msg = std::make_shared<mavsdk::Telemetry::Position>(std::move(empty_gps_msg));
 
@@ -35,6 +35,9 @@ public:
 
             telemetry_->subscribe_position([this](mavsdk::Telemetry::Position position) {
                 std::lock_guard<std::mutex> lock(_mutex);
+
+                actual_fc_height_amsl = position.absolute_altitude_m;
+                position.absolute_altitude_m = position.relative_altitude_m + home_ground_altitude_amsl; 
                 *recent_gps_msg = position;
             });
 
@@ -60,7 +63,12 @@ public:
                 });
             }
 
-        }else {
+            telemetry_->subscribe_home([this](mavsdk::Telemetry::Position home_position) {
+                std::lock_guard<std::mutex> lock(_mutex);
+                *recent_home_msg = home_position;
+            });
+
+        } else {
             RCLCPP_ERROR(this->get_logger(), "No MAVSDK system found, position listener cannot subscribe to telemetry.");
         }
     }
@@ -104,22 +112,14 @@ public:
     }
 
 
-    void update_home_position() override {
+    void is_home_position_set() override {
         std::lock_guard<std::mutex> lock(_mutex);
 
-        telemetry_->get_gps_global_origin_async([this](mavsdk::Telemetry::Result result, mavsdk::Telemetry::GpsGlobalOrigin origin) {
-                if(origin.latitude_deg != 0.0 && origin.longitude_deg != 0.0 && origin.altitude_m != 0.0 &&
-                    origin.latitude_deg != -1.0 && origin.longitude_deg != -1.0 && origin.altitude_m != -1.0 &&
-                    !std::isnan(origin.latitude_deg) && !std::isnan(origin.longitude_deg) && !std::isnan(origin.altitude_m)) {
-
-                    recent_home_msg->latitude_deg = origin.latitude_deg;
-                    recent_home_msg->longitude_deg = origin.longitude_deg;
-                    recent_home_msg->absolute_altitude_m = origin.altitude_m;
-                    gps_init_set.exchange(true);
-
-                }
-            }
-        );
+        if(recent_home_msg->latitude_deg != 0.0 && recent_home_msg->longitude_deg != 0.0 && recent_home_msg->absolute_altitude_m != 0.0 &&
+            recent_home_msg->latitude_deg != -1.0 && recent_home_msg->longitude_deg != -1.0 && recent_home_msg->absolute_altitude_m != -1.0 &&
+            !std::isnan(recent_home_msg->latitude_deg) && !std::isnan(recent_home_msg->longitude_deg) && !std::isnan(recent_home_msg->absolute_altitude_m)) {
+            gps_init_set.exchange(true);
+        }
     }
 
     bool get_first_gps_future() override {
@@ -138,6 +138,7 @@ public:
 
     std::shared_ptr<mavsdk::Telemetry::Position> get_recent_home_msg() override {
         std::lock_guard<std::mutex> lock(_mutex);
+        recent_home_msg->absolute_altitude_m = recent_home_msg->relative_altitude_m + home_ground_altitude_amsl;
         return recent_home_msg;
     }
 
@@ -149,7 +150,11 @@ public:
         std::lock_guard<std::mutex> lock(_mutex);
         platform_state_ = new_platform_state;
     }
-
+    
+    double get_fc_height() override {
+        std::lock_guard<std::mutex> lock(_mutex);
+        return actual_fc_height_amsl;
+    }
 private:
     std::mutex _mutex;
     std::shared_ptr<mavsdk::Telemetry::Position> recent_gps_msg;
@@ -166,6 +171,8 @@ private:
     std::shared_ptr<mavsdk::Telemetry> telemetry_;
 
     std::string platform_state_ = "INACTIVE";
+
+    double actual_fc_height_amsl = -1.0;
 };
 
 #endif

@@ -26,7 +26,7 @@ public:
      /**
 	* @brief Gets the home position
 	*/
-    virtual void update_home_position() = 0;
+    virtual void is_home_position_set() = 0;
 
     /**
      * @brief Gets the recent ned position.
@@ -47,6 +47,27 @@ public:
      * @brief Sets the recent platform state.
      */
      virtual void set_recent_platform_state(std::string new_platform_state) = 0;
+
+    /**
+     * @brief Set the home ground altitude AMSL
+     * @param height_amsl The height above mean sea level in meters
+     */
+    void set_home_ground_altitude_amsl(double height_amsl) {
+        home_ground_altitude_amsl = height_amsl;
+    }
+
+    /**
+     * @brief Get the home ground altitude AMSL
+     * @return The height above mean sea level in meters
+     */
+    double get_home_ground_altitude_amsl() const {
+        return home_ground_altitude_amsl;
+    }
+
+    virtual double get_fc_height() = 0;
+
+protected:
+    double home_ground_altitude_amsl = 0.0; // Ground height in meters (for altitude conversion)
 
 };
 

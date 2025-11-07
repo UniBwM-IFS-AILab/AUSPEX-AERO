@@ -1,4 +1,5 @@
 #include "auspex_obc/obc_node.h"
+#include "auspex_obc/ext_data_listener.hpp"
 #include <iostream>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -20,123 +21,51 @@ std::string getHomeDirectory() {
     return std::string(home);
 }
 
-std::string register_platform(json& config, float* return_img_width, float* return_img_height, float* return_cam_fps) {
-	std::shared_ptr<rclcpp::Node> node = rclcpp::Node::make_shared("platform_registry_client_node");
-	rclcpp::Client<ExistsKnowledge>::SharedPtr exists_knowledge_client_ = node->create_client<ExistsKnowledge>("exists_knowledge");
-	rclcpp::Client<InsertKnowledge>::SharedPtr insert_knowledge_client_ = node->create_client<InsertKnowledge>("insert_knowledge");
-	auto publisher_ = node->create_publisher<PlatformCapabilities>("platform_capabilities", 10);
-
-	while (!exists_knowledge_client_->wait_for_service(1s)) {
-		if (!rclcpp::ok()) {
-			RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Interrupted while waiting for the service. Exiting.");
-			return "";
-		}
-		RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "exists_knowledge_client_ service not available, waiting again...");
-	}
+std::string get_values_from_config(json& config, float* return_img_width, float* return_img_height, float* return_cam_fps, std::string* payload) {
 
 	std::string platform_id = config["platform_id"];
-
-	auto exists_request = std::make_shared<ExistsKnowledge::Request>();
-	exists_request->collection = "platform";
-	exists_request->path = "$[?(@.platform_id==\"" + platform_id + "\")]";
-	// Asynchronously call the service
-	auto exists_future_result  = exists_knowledge_client_->async_send_request(exists_request);
-	// Block until the result is available or timeout occurs
-    auto spin_result = rclcpp::spin_until_future_complete(node, exists_future_result);
-	if (spin_result != rclcpp::FutureReturnCode::SUCCESS) {
-		if (spin_result == rclcpp::FutureReturnCode::TIMEOUT) {
-			RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Service call to ExistsKnowledge %s timed out.", platform_id.c_str());
-		} else if (spin_result == rclcpp::FutureReturnCode::INTERRUPTED) {
-			RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Service call to ExistsKnowledge %s was interrupted.", platform_id.c_str());
-		} else {
-			RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Service call to ExistsKnowledge %s failed with unknown error.", platform_id.c_str());
-		}
-		return "";
-	}
-
-	auto exists_result = exists_future_result.get();
-	if (exists_result->exists) {
-		RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Platform %s already existing.", platform_id.c_str());
-		return "";
-	}
-
-	RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Platform %s does not exist in Knowledgebase, now inserting...", platform_id.c_str());
-
-	while (!insert_knowledge_client_->wait_for_service(1s)) {
-		if (!rclcpp::ok()) {
-			RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Interrupted while waiting for the service. Exiting.");
-			return "";
-		}
-		RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "insert_knowledge_client_ service not available, waiting again...");
-	}
-
-	auto insert_request = std::make_shared<InsertKnowledge::Request>();
-	insert_request->collection = "platform";
-	insert_request->path = "$";
-	insert_request->entity = "{\"platform_id\":\"" + platform_id + "\"}";
-	// Asynchronously call the service
-	auto insert_future_result  = insert_knowledge_client_->async_send_request(insert_request);
-
-	if (!(rclcpp::spin_until_future_complete(node, insert_future_result) == rclcpp::FutureReturnCode::SUCCESS)){
-		RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Service call to InsertKnowledge %s timed out.", platform_id.c_str());
-		return "";
-	}
-
-	auto insert_result = insert_future_result.get();
-	if (insert_result->success) {
-		RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Platform %s registered.", platform_id.c_str());
-	} else {
-		RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Platform %s could not be registered.", platform_id.c_str());
-		return "";
-	}
-
-	std::vector<SensorCapabilities> sensor_capabilities_msg;
-
-	for(auto &sensor : config["sensors"]){
-		auto sensor_msg = SensorCapabilities();
-		sensor_msg.sensor_id = sensor["id"];
-
-		auto sensor_mode = SensorMode();
-		if(sensor["type"] == "eo_camera"){
-			sensor_mode.value = SensorMode::SENSOR_MODE_EO;
-		}else if(sensor["type"] == "ir_camera") {
-			sensor_mode.value = SensorMode::SENSOR_MODE_IR;
-		}
-		sensor_msg.sensor_mode = sensor_mode;
-
-		sensor_msg.fov_hor_min = sensor["specifications"]["fov"]["horizontal"]["min"];
-		sensor_msg.fov_hor_max = sensor["specifications"]["fov"]["horizontal"]["max"];
-		sensor_msg.fov_vert_min = sensor["specifications"]["fov"]["vertical"]["min"];
-		sensor_msg.fov_vert_max = sensor["specifications"]["fov"]["vertical"]["max"];
-		sensor_msg.image_width = sensor["specifications"]["image_size"]["width"];
-		sensor_msg.image_height = sensor["specifications"]["image_size"]["height"];
-
-		*return_img_width = sensor["specifications"]["image_size"]["width"];
-		*return_img_height = sensor["specifications"]["image_size"]["height"];
-		*return_cam_fps = sensor["specifications"]["image_fps"];
-
-		sensor_capabilities_msg.push_back(sensor_msg);
-	}
-
-	auto platform_capabilities_msg = PlatformCapabilities();
-    platform_capabilities_msg.platform_id = platform_id;
-    platform_capabilities_msg.model_info = config["platform_details"]["model"];
-
-    platform_capabilities_msg.max_flight_duration = config["platform_details"]["max_flight_duration"];
-    platform_capabilities_msg.max_flight_height = config["platform_details"]["max_flight_height"];
-    platform_capabilities_msg.max_velocity = config["platform_details"]["max_velocity"];
-    platform_capabilities_msg.turning_radius = config["platform_details"]["turning_radius"];
-
-	auto platform_class = PlatformClass();
-	platform_class.value = PlatformClass::PLATFORM_CLASS_DRONE;
-    platform_capabilities_msg.platform_class = platform_class;
-    platform_capabilities_msg.sensor_caps = sensor_capabilities_msg;
-
-
-	publisher_->publish(platform_capabilities_msg);
-	publisher_->publish(platform_capabilities_msg);
+	*return_img_width = config["sensors"][0]["specifications"]["image_size"]["width"];
+	*return_img_height = config["sensors"][0]["specifications"]["image_size"]["height"];
+	*return_cam_fps = config["sensors"][0]["specifications"]["image_fps"];
+	*payload = config["payload"][0]["type"];
 
 	return platform_id;
+}
+
+/**
+* @brief Get the IP address of tap0 interface if it exists and starts with 10.8.
+* @return IP address as string, or "0.0.0.0" if tap0 not found or doesn't match criteria
+*/
+std::string getTAP0IpAddress() {
+	struct ifaddrs *ifaddr, *ifa;
+	char ip_str[INET_ADDRSTRLEN];
+	
+	// Get list of network interfaces
+	if (getifaddrs(&ifaddr) == -1) {
+		return "0.0.0.0";
+	}
+	
+	// Iterate through interfaces
+	for (ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
+		if (ifa->ifa_addr == nullptr) continue;
+		// Check if this is tap0 interface and is IPv4
+		if (strcmp(ifa->ifa_name, "tap0") == 0 && ifa->ifa_addr->sa_family == AF_INET) {
+			struct sockaddr_in* sin = (struct sockaddr_in*)ifa->ifa_addr;
+			
+			// Convert IP to string
+			if (inet_ntop(AF_INET, &sin->sin_addr, ip_str, INET_ADDRSTRLEN) != nullptr) {
+				std::string ip_address(ip_str);
+				// Check if IP starts with "10.8."
+				if (ip_address.substr(0, 5) == "10.8.") {
+					freeifaddrs(ifaddr);
+					return ip_address;
+				}
+			}
+		}
+	}
+	
+	freeifaddrs(ifaddr);
+	return "0.0.0.0";
 }
 
 // for running multiple nodes, see as Example https://docs.ros.org/en/foxy/Tutorials/Demos/Intra-Process-Communication.html
@@ -174,21 +103,34 @@ int main(int argc, char* argv[]) {
         std::cerr << "Exception: " << e.what() << std::endl;
     }
 
+	// RTSP vars
+	std::string platform_ip = getTAP0IpAddress(); // to be able to publish sim stream over VPN
+	int port_offset = 0; // should be zero for real platforms
+
 	// If in simulation mode use command line argument as names
 	if(FC_TYPE.find("SIMULATED") != std::string::npos){
 		if(argv[1]!=NULL && strcmp(argv[1],"--ros-args")!=0){
+			
 			config["platform_id"] = argv[1];
+			port_offset = std::stoi(std::string(argv[1]).substr(std::string(argv[1]).rfind('_')+1));
+
 		}else{
 			config["platform_id"] = "vhcl_init_failed";
+		}
+	}else{
+		if(platform_ip == "0.0.0.0") {
+			RCLCPP_INFO(rclcpp::get_logger("main"), "No tap0 interface found, shutting down...");
+			return -1;
 		}
 	}
 
 	float cam_fps_ = 1.0;
 	float image_height = 1.0;
 	float image_width = 1.0;
+	std::string payload = "";
 
 	// Try to register platform to BK
-	std::string platform_id = register_platform(config, &image_width, &image_height, &cam_fps_);
+	std::string platform_id = get_values_from_config(config, &image_width, &image_height, &cam_fps_, &payload);
 
 	if(platform_id == ""){
 		RCLCPP_INFO(rclcpp::get_logger("main"), "Shutting down...");
@@ -213,24 +155,36 @@ int main(int argc, char* argv[]) {
 		return -1;
 	}
 
-	auto cam_publisher = std::make_shared<CamPublisher>(platform_id, image_height, image_width, cam_fps_);
-	auto drone_state_publisher = std::make_shared<DroneStatePublisher>(platform_id, config);
+	// auto cam_publisher = std::make_shared<CamPublisher>(platform_id, platform_ip, port_offset, image_height, image_width, cam_fps_);
+	int bitrate = 1000; // in kbit/s
+	#ifdef SWITCH_CAM_HEADER
+		#if SWITCH_CAM_HEADER == 0
+			auto cam_controller = std::make_shared<CameraController>(platform_id, "camera_controller_empty", platform_ip, 8554+port_offset, image_width, image_height, bitrate, image_width, image_height, bitrate, cam_fps_);
+		#else
+			auto cam_controller = std::make_shared<CameraController>(platform_id, platform_ip, 8554+port_offset, image_width, image_height, bitrate, image_width, image_height, bitrate, cam_fps_);
+			cam_controller->init();
+		#endif
+	#endif
+
+	auto platform_state_publisher = std::make_shared<PlatformStatePublisher>(platform_id, platform_ip, config);
 
 	RCLCPP_INFO(rclcpp::get_logger("main"), "Waiting for GPS init...");
 	while (!fc_interface->get_position_listener()->get_first_gps_future()) {
 		RCLCPP_INFO(rclcpp::get_logger("main"), "Waiting for GPS init...");
-		fc_interface->get_position_listener()->update_home_position();
+		fc_interface->get_position_listener()->is_home_position_set();
 		std::this_thread::sleep_for(std::chrono::seconds(1));
 	}
 	RCLCPP_INFO(rclcpp::get_logger("main"), "Launching Offboard Control node...");
-	auto controller = std::make_shared<OffboardController>(fc_interface->get_vehicle_status_listener(), fc_interface->get_position_listener(), fc_interface, drone_state_publisher, cam_publisher, platform_id);
+	auto external_data_listener = std::make_shared<ExternalDataListener>(platform_id);
+	auto controller = std::make_shared<OffboardController>(fc_interface->get_vehicle_status_listener(), fc_interface->get_position_listener(), fc_interface, platform_state_publisher, cam_controller, external_data_listener, platform_id, payload);
 
 
 	rclcpp::executors::MultiThreadedExecutor executor;
 	executor.add_node(fc_interface->get_vehicle_status_listener());
 	executor.add_node(fc_interface->get_position_listener());
-	executor.add_node(cam_publisher);
-	executor.add_node(drone_state_publisher);
+	executor.add_node(cam_controller);
+	executor.add_node(platform_state_publisher);
+	executor.add_node(external_data_listener);
 	executor.add_node(controller);
 
 	RCLCPP_INFO(rclcpp::get_logger("main"), "Initialized offboard controller. Now spinning...");
