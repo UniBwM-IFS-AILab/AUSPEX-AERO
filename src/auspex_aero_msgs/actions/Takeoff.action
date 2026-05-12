@@ -1,0 +1,8 @@
+# Goal
+float32 height_agl_m
+---
+# Result
+bool success
+---
+# Feedback
+float32 progress_percent

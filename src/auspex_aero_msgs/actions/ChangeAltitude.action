@@ -1,0 +1,8 @@
+# Goal
+float32 rel_alt_m
+---
+# Result
+bool success
+---
+# Feedback
+float32 progress_percent

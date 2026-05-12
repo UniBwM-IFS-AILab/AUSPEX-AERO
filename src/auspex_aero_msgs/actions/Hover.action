@@ -1,0 +1,8 @@
+# Goal
+int32 duration_s
+---
+# Result
+bool success
+---
+# Feedback
+float32 progress_percent

@@ -1,0 +1,13 @@
+# Goal
+float64 target_lat_deg
+float64 target_lon_deg
+float32 target_alt_amsl_m
+float32 radius_m
+float32 speed_m_s
+int32 duration_s
+---
+# Result
+bool success
+---
+# Feedback
+float32 progress_percent
